@@ -909,7 +909,7 @@ function HelpTab() {
         <HelpStep num="4" text="Go to Banks → for each child, create savings goals (e.g. Screen Time, New Toy). Set a point target and reward description." />
         <HelpStep num="5" text="Optional: go to Calendar → set up your fortnight cycle if you have a split care arrangement." />
         <HelpStep num="6" text="Share the app URL with your family. Kids tap their profile to log in and start claiming chores!" />
-        <HelpTip text="The default parent PIN is 1234. Change it in Settings → Edit Profile & PIN as soon as you're set up." />
+        <HelpTip text="The default parent PIN is 1234. Change it in Settings as soon as you are set up." />
       </HelpSection>
 
       {/* Approvals */}
@@ -917,10 +917,10 @@ function HelpTab() {
         <div style={{fontSize:".88rem",color:"var(--mid)",fontWeight:600,marginTop:10,lineHeight:1.6}}>
           When a child claims a chore, it appears here as a pending card. You must approve or reject it before any points are awarded.
         </div>
-        <HelpStep num="1" text="Review the child's name, chore, and submission time." />
+        <HelpStep num="1" text="Review the child name, chore, and submission time." />
         <HelpStep num="2" text="If a photo was required, tap 📸 View Photo to inspect their evidence." />
-        <HelpStep num="3" text='Tap "✓ Yes" to approve — points land in the child\'s wallet instantly.' />
-        <HelpStep num="4" text='Tap "✗ No" to reject — the child can submit again after fixing the issue.' />
+        <HelpStep num="3" text='Tap "✓ Yes" to approve — points land in the child wallet instantly.' />
+        <HelpStep num="4" text='Tap "✗ No" to reject — the child can resubmit after fixing the issue.' />
         <HelpTip text="The red dot on the Approvals tab tells you how many are waiting. Check it daily!" />
       </HelpSection>
 
@@ -933,9 +933,9 @@ function HelpTab() {
         <HelpStep num="2" text="Pick any date in Week 1 of your care cycle. The calendar snaps to the nearest Monday/Sunday automatically — a green confirmation shows the exact start date." />
         <HelpStep num="3" text="Tap any day cell to open the day panel. Toggle which children are in care that day using the green chips." />
         <HelpStep num="4" text='In the day panel, tap "+ Assign Chore" to pin a specific chore to a specific child on that day. It will repeat every fortnight.' />
-        <HelpTip text="Children see their scheduled chores for today in their Schedule tab — they don't see the full calendar." />
+        <HelpTip text="Children see their scheduled chores for today in their Schedule tab — the full calendar is only visible to parents." />
         <div style={{background:"var(--lavender)",borderRadius:10,padding:"10px 12px",marginTop:10,fontSize:".82rem",fontWeight:700,color:"var(--purple)",lineHeight:1.5}}>
-          <strong>Split care example:</strong> Mark Week 1 all days for Child A, Week 2 all days for Child B — then assign each child's chores to their respective week.
+          <strong>Split care example:</strong> Mark Week 1 all days for Child A, Week 2 all days for Child B — then assign each child chores to their respective week.
         </div>
       </HelpSection>
 
@@ -991,7 +991,7 @@ function HelpTab() {
         </div>
         {[
           ["Complete chore → Submit","Child claims a chore and submits it (with photo if required)"],
-          ["Parent approves","Points are added to the child's wallet instantly"],
+          ["Parent approves","Points are added to the child wallet instantly"],
           ["Child distributes","Child moves points from wallet into savings banks"],
           ["Redeem reward","When a bank reaches its target, child redeems the reward"],
         ].map(([step,desc],i)=>(
@@ -1037,14 +1037,14 @@ function HelpTab() {
           <div style={{fontWeight:800,fontSize:".85rem",marginBottom:4}}>📊 Family Stats</div>
           <div style={{fontSize:".82rem",color:"var(--mid)",fontWeight:600,lineHeight:1.5}}>A quick summary of total children, chores, and approved completions.</div>
         </div>
-        <HelpTip text="Change the default PIN (1234) as soon as you set up the app so your kids can't sneak into the parent portal!" />
+        <HelpTip text="Change the default PIN (1234) as soon as you set up the app so your kids cannot sneak into the parent portal!" />
       </HelpSection>
 
       {/* Data note */}
       <div style={{background:"#fef3c7",borderRadius:14,padding:"14px 16px",marginTop:6,marginBottom:20}}>
         <div style={{fontWeight:800,fontSize:".88rem",color:"#92400e",marginBottom:4}}>📱 Data & Syncing</div>
         <div style={{fontSize:".82rem",color:"#92400e",fontWeight:600,lineHeight:1.6}}>
-          Currently, data is stored on each device separately. If you approve a chore on your phone, your child won't see it on a different device until a shared database is connected. A cloud sync upgrade is planned for a future update.
+          Currently, data is stored on each device separately. If you approve a chore on your phone, your child will not see it on a different device until a shared database is connected. A cloud sync upgrade is planned for a future update.
         </div>
       </div>
     </div>
