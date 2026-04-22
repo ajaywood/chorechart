@@ -1,27 +1,43 @@
 import { useState, useRef } from "react";
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-const STORAGE_KEY = "chorechart_data_v2";
+const STORAGE_KEY = "chorechart_v3";
+
+const DAY_NAMES_SUN = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const DAY_NAMES_MON = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const FULL_DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+// calendar slot key: "W{0|1}-D{0-6}" where W=fortnight week, D=day index within that week
+const slotKey = (week, day) => `W${week}-D${day}`;
 
 const defaultData = {
-  parents: [{ id: "p1", name: "Parent", pin: "1234", photo: null, avatar: "👤" }],
+  parents:  [{ id:"p1", name:"Parent", pin:"1234", photo:null, avatar:"👤" }],
   children: [
-    { id: "c1", name: "Alex", avatar: "🦊", photo: null, walletPoints: 0, pin: null },
-    { id: "c2", name: "Sam",  avatar: "🐨", photo: null, walletPoints: 0, pin: null },
+    { id:"c1", name:"Alex", avatar:"🦊", photo:null, walletPoints:0, pin:null },
+    { id:"c2", name:"Sam",  avatar:"🐨", photo:null, walletPoints:0, pin:null },
   ],
   chores: [
-    { id: "ch1", title: "Wash Dishes",       points: 2, icon: "🍽️", requiresPhoto: false, assignedTo: "all", recurring: true },
-    { id: "ch2", title: "Vacuum Living Room", points: 3, icon: "🧹", requiresPhoto: true,  assignedTo: "all", recurring: true },
-    { id: "ch3", title: "Take Out Trash",     points: 2, icon: "🗑️", requiresPhoto: false, assignedTo: "all", recurring: true },
-    { id: "ch4", title: "Clean Bedroom",      points: 4, icon: "🛏️", requiresPhoto: true,  assignedTo: "all", recurring: true },
+    { id:"ch1", title:"Wash Dishes",       points:2, icon:"🍽️", requiresPhoto:false, recurring:true },
+    { id:"ch2", title:"Vacuum Living Room", points:3, icon:"🧹", requiresPhoto:true,  recurring:true },
+    { id:"ch3", title:"Take Out Trash",     points:2, icon:"🗑️", requiresPhoto:false, recurring:true },
+    { id:"ch4", title:"Clean Bedroom",      points:4, icon:"🛏️", requiresPhoto:true,  recurring:true },
   ],
+  // calendar: { slot -> [childId, ...] } marks which kids are "in care" each day of the fortnight
+  careSchedule: {},
+  // choreSchedule: [{ choreId, childId, slot }] — chore assigned to a child on a specific fortnight slot
+  choreSchedule: [],
   banks: [
-    { id: "b1", childId: "c1", name: "Screen Time", icon: "📱", type: "recurring", costPoints: 5,  reward: "15 min screen time", savedPoints: 0 },
-    { id: "b2", childId: "c1", name: "New Toy",      icon: "🎮", type: "goal",      costPoints: 20, reward: "LEGO Set",           savedPoints: 0 },
-    { id: "b3", childId: "c2", name: "Screen Time",  icon: "📱", type: "recurring", costPoints: 5,  reward: "15 min screen time", savedPoints: 0 },
+    { id:"b1", childId:"c1", name:"Screen Time", icon:"📱", type:"recurring", costPoints:5,  reward:"15 min screen time", savedPoints:0 },
+    { id:"b2", childId:"c1", name:"New Toy",      icon:"🎮", type:"goal",      costPoints:20, reward:"LEGO Set",           savedPoints:0 },
+    { id:"b3", childId:"c2", name:"Screen Time",  icon:"📱", type:"recurring", costPoints:5,  reward:"15 min screen time", savedPoints:0 },
   ],
   choreRequests: [],
   transactions: [],
+  settings: {
+    pointValue: 0.50,       // $ per point
+    calendarStartDay: "Mon", // "Mon" or "Sun"
+    fortnightStart: null,    // ISO date string of the Monday/Sunday that week 1 started
+  },
 };
 
 function loadData() {
@@ -31,16 +47,37 @@ function loadData() {
 function saveData(d) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); } catch {} }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const pts   = n => `${n} pt${n !== 1 ? "s" : ""}`;
-const money = p => `$${(p * 0.5).toFixed(2)}`;
-const uid   = () => Math.random().toString(36).slice(2, 10);
-const now   = () => new Date().toLocaleString("en-AU", { dateStyle: "short", timeStyle: "short" });
-const readFile = file => new Promise(res => { const r = new FileReader(); r.onload = e => res(e.target.result); r.readAsDataURL(file); });
+const uid   = () => Math.random().toString(36).slice(2,10);
+const now   = () => new Date().toLocaleString("en-AU",{dateStyle:"short",timeStyle:"short"});
+const money = (pts, rate) => `$${(pts * rate).toFixed(2)}`;
+const pts   = n => `${n} pt${n!==1?"s":""}`;
+const readFile = f => new Promise(res => { const r=new FileReader(); r.onload=e=>res(e.target.result); r.readAsDataURL(f); });
 
-// ─── Avatar component ─────────────────────────────────────────────────────────
-function Av({ photo, emoji, size = 40 }) {
-  if (photo) return <img src={photo} alt="" style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0, display: "block" }} />;
-  return <span style={{ fontSize: size * 0.58, lineHeight: 1, display: "block", textAlign: "center" }}>{emoji || "👤"}</span>;
+// Get which fortnight slot (week 0 or 1, day 0-6) today falls on
+function getTodaySlot(settings) {
+  const startDay = settings.calendarStartDay === "Sun" ? 0 : 1; // 0=Sun,1=Mon
+  const anchor = settings.fortnightStart ? new Date(settings.fortnightStart) : null;
+  if (!anchor) return null;
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  anchor.setHours(0,0,0,0);
+  const diffDays = Math.floor((today - anchor) / 86400000);
+  if (diffDays < 0) return null;
+  const slotDay = diffDays % 14;
+  const week = Math.floor(slotDay / 7);
+  const day  = slotDay % 7;
+  return { week, day, slotDay };
+}
+
+// Build ordered day labels for the calendar grid
+function buildDayLabels(startDay) {
+  return startDay === "Sun" ? DAY_NAMES_SUN : DAY_NAMES_MON;
+}
+
+// ─── Avatar ───────────────────────────────────────────────────────────────────
+function Av({ photo, emoji, size=40 }) {
+  if (photo) return <img src={photo} alt="" style={{width:size,height:size,borderRadius:"50%",objectFit:"cover",flexShrink:0,display:"block"}} />;
+  return <span style={{fontSize:size*0.58,lineHeight:1,display:"block",textAlign:"center"}}>{emoji||"👤"}</span>;
 }
 
 // ─── AvatarPicker ─────────────────────────────────────────────────────────────
@@ -48,25 +85,20 @@ function AvatarPicker({ photo, emoji, emojiList, onPhoto, onEmoji }) {
   const ref = useRef();
   return (
     <div className="form-group">
-      <label className="form-label">Avatar — tap ring to upload a photo, or pick an emoji below</label>
-      <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 10 }}>
-        <div onClick={() => ref.current.click()} style={{ width: 72, height: 72, borderRadius: "50%", border: "3px dashed #cbd5e1", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", overflow: "hidden", flexShrink: 0, background: "#f8fafc", position: "relative" }}>
-          {photo ? <img src={photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <Av emoji={emoji} size={52} />}
-          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.4)", color: "white", fontSize: ".65rem", fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%", opacity: 0, transition: "opacity .2s" }}
-            onMouseEnter={e => e.currentTarget.style.opacity = 1} onMouseLeave={e => e.currentTarget.style.opacity = 0}>
-            📷 Upload
-          </div>
+      <label className="form-label">Avatar — tap ring for photo, or pick emoji</label>
+      <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:10}}>
+        <div onClick={()=>ref.current.click()} style={{width:72,height:72,borderRadius:"50%",border:"3px dashed #cbd5e1",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",overflow:"hidden",flexShrink:0,background:"#f8fafc"}}>
+          {photo ? <img src={photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} /> : <Av emoji={emoji} size={52} />}
         </div>
-        <div style={{ fontSize: ".8rem", color: "var(--mid)", fontWeight: 600 }}>Upload a photo<br/>or choose an emoji →</div>
-        <input ref={ref} type="file" accept="image/*" style={{ display: "none" }}
-          onChange={async e => { if (e.target.files[0]) { onPhoto(await readFile(e.target.files[0])); } }} />
+        <div style={{fontSize:".8rem",color:"var(--mid)",fontWeight:600}}>Tap circle to<br/>upload photo</div>
+        <input ref={ref} type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{if(e.target.files[0]){onPhoto(await readFile(e.target.files[0]));}}} />
       </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {emojiList.map(av => (
-          <div key={av} onClick={() => { onEmoji(av); onPhoto(null); }}
-            style={{ fontSize: "1.5rem", cursor: "pointer", padding: 6, borderRadius: 10,
-              background: !photo && emoji === av ? "#dbeafe" : "#f1f5f9",
-              border: !photo && emoji === av ? "2px solid #3b82f6" : "2px solid transparent" }}>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        {emojiList.map(av=>(
+          <div key={av} onClick={()=>{onEmoji(av);onPhoto(null);}}
+            style={{fontSize:"1.5rem",cursor:"pointer",padding:6,borderRadius:10,
+              background:!photo&&emoji===av?"#dbeafe":"#f1f5f9",
+              border:!photo&&emoji===av?"2px solid #3b82f6":"2px solid transparent"}}>
             {av}
           </div>
         ))}
@@ -78,222 +110,232 @@ function AvatarPicker({ photo, emoji, emojiList, onPhoto, onEmoji }) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    --sky:#e0f2fe; --mint:#d1fae5; --peach:#ffe4cc; --lavender:#ede9fe; --yellow:#fef9c3;
-    --blue:#3b82f6; --green:#10b981; --orange:#f97316; --purple:#8b5cf6; --amber:#f59e0b;
-    --red:#ef4444; --dark:#1e293b; --mid:#64748b; --white:#ffffff;
-    --radius:16px; --shadow:0 4px 24px rgba(0,0,0,.08); --shadow-lg:0 8px 40px rgba(0,0,0,.14);
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+  :root{
+    --sky:#e0f2fe;--mint:#d1fae5;--peach:#ffe4cc;--lavender:#ede9fe;--yellow:#fef9c3;
+    --blue:#3b82f6;--green:#10b981;--orange:#f97316;--purple:#8b5cf6;--amber:#f59e0b;
+    --red:#ef4444;--dark:#1e293b;--mid:#64748b;--white:#ffffff;
+    --radius:16px;--shadow:0 4px 24px rgba(0,0,0,.08);--shadow-lg:0 8px 40px rgba(0,0,0,.14);
   }
-  body { font-family:'Nunito',sans-serif; background:var(--sky); color:var(--dark); min-height:100vh; }
-  .app { min-height:100vh; display:flex; flex-direction:column; }
+  body{font-family:'Nunito',sans-serif;background:var(--sky);color:var(--dark);min-height:100vh;}
+  .app{min-height:100vh;display:flex;flex-direction:column;}
 
-  .nav { background:var(--white); padding:12px 20px; display:flex; align-items:center; justify-content:space-between; box-shadow:0 2px 12px rgba(0,0,0,.06); position:sticky; top:0; z-index:100; }
-  .nav-logo { font-family:'Fredoka One',cursive; font-size:1.35rem; color:var(--blue); display:flex; align-items:center; gap:10px; }
-  .nav-right { display:flex; gap:10px; align-items:center; }
-  .nav-badge { background:var(--sky); border-radius:20px; padding:6px 14px; font-weight:700; font-size:.85rem; color:var(--blue); }
-  .nav-btn { background:var(--dark); color:white; border:none; border-radius:12px; padding:8px 16px; font-family:'Nunito',sans-serif; font-weight:700; font-size:.85rem; cursor:pointer; }
-  .nav-btn.ghost { background:transparent; color:var(--mid); border:2px solid #e2e8f0; }
+  .nav{background:var(--white);padding:12px 20px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 12px rgba(0,0,0,.06);position:sticky;top:0;z-index:100;}
+  .nav-logo{font-family:'Fredoka One',cursive;font-size:1.35rem;color:var(--blue);display:flex;align-items:center;gap:10px;}
+  .nav-right{display:flex;gap:10px;align-items:center;}
+  .nav-badge{background:var(--sky);border-radius:20px;padding:6px 14px;font-weight:700;font-size:.85rem;color:var(--blue);}
+  .nav-btn{background:var(--dark);color:white;border:none;border-radius:12px;padding:8px 16px;font-family:'Nunito',sans-serif;font-weight:700;font-size:.85rem;cursor:pointer;}
+  .nav-btn.ghost{background:transparent;color:var(--mid);border:2px solid #e2e8f0;}
 
-  .main { flex:1; padding:24px 20px; max-width:900px; margin:0 auto; width:100%; }
-  .section-title { font-family:'Fredoka One',cursive; font-size:1.35rem; color:var(--dark); margin-bottom:16px; display:flex; align-items:center; gap:8px; }
+  .main{flex:1;padding:20px 16px;max-width:960px;margin:0 auto;width:100%;}
+  .section-title{font-family:'Fredoka One',cursive;font-size:1.3rem;color:var(--dark);margin-bottom:14px;display:flex;align-items:center;gap:8px;}
 
-  .card { background:var(--white); border-radius:var(--radius); padding:20px; box-shadow:var(--shadow); margin-bottom:16px; }
-  .card-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:14px; margin-bottom:24px; }
+  .card{background:var(--white);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);margin-bottom:14px;}
+  .card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin-bottom:20px;}
 
-  .chore-card { background:var(--white); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:10px; border:2px solid transparent; transition:all .2s; }
-  .chore-card:hover { border-color:var(--blue); transform:translateY(-2px); }
-  .chore-icon { font-size:2.2rem; }
-  .chore-title { font-weight:800; }
-  .chore-pts { color:var(--amber); font-weight:800; font-size:.9rem; }
-  .chore-tags { display:flex; gap:6px; flex-wrap:wrap; }
-  .tag { border-radius:20px; padding:3px 10px; font-size:.75rem; font-weight:700; }
-  .tag-photo { background:var(--peach); color:var(--orange); }
-  .tag-recurring { background:var(--mint); color:var(--green); }
-  .tag-oneoff { background:var(--lavender); color:var(--purple); }
+  .chore-card{background:var(--white);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:8px;border:2px solid transparent;transition:all .2s;}
+  .chore-card:hover{border-color:var(--blue);transform:translateY(-2px);}
+  .tag{border-radius:20px;padding:3px 10px;font-size:.72rem;font-weight:700;}
+  .tag-photo{background:var(--peach);color:var(--orange);}
+  .tag-recurring{background:var(--mint);color:var(--green);}
+  .tag-oneoff{background:var(--lavender);color:var(--purple);}
+  .tag-cal{background:var(--sky);color:var(--blue);}
 
-  .bank-card { background:var(--white); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:10px; }
-  .bank-progress { height:8px; background:#e2e8f0; border-radius:99px; overflow:hidden; }
-  .bank-progress-fill { height:100%; border-radius:99px; background:linear-gradient(90deg,var(--blue),var(--purple)); transition:width .4s; }
-  .bank-name { font-weight:800; }
-  .bank-reward { font-size:.8rem; color:var(--mid); font-weight:600; }
-  .bank-saved { font-weight:800; color:var(--green); font-size:.9rem; }
+  .bank-card{background:var(--white);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:8px;}
+  .bank-progress{height:8px;background:#e2e8f0;border-radius:99px;overflow:hidden;}
+  .bank-progress-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--blue),var(--purple));transition:width .4s;}
 
-  .request-card { background:var(--white); border-radius:var(--radius); padding:16px 20px; box-shadow:var(--shadow); display:flex; align-items:center; gap:14px; margin-bottom:12px; border-left:4px solid var(--amber); }
-  .request-card.approved { border-left-color:var(--green); }
-  .request-card.rejected { border-left-color:var(--red); }
-  .request-info { flex:1; }
-  .request-child { font-size:.8rem; color:var(--mid); font-weight:600; display:flex; align-items:center; gap:5px; }
-  .request-chore { font-weight:800; }
-  .request-time { font-size:.75rem; color:var(--mid); }
+  .request-card{background:var(--white);border-radius:var(--radius);padding:14px 18px;box-shadow:var(--shadow);display:flex;align-items:center;gap:12px;margin-bottom:10px;border-left:4px solid var(--amber);}
+  .request-card.approved{border-left-color:var(--green);}
+  .request-card.rejected{border-left-color:var(--red);}
+  .request-info{flex:1;}
 
-  .btn { border:none; border-radius:12px; padding:10px 18px; font-family:'Nunito',sans-serif; font-weight:800; font-size:.9rem; cursor:pointer; transition:all .2s; }
-  .btn:hover { opacity:.88; transform:translateY(-1px); }
-  .btn:active { transform:translateY(0); }
-  .btn-blue   { background:var(--blue);   color:white; }
-  .btn-green  { background:var(--green);  color:white; }
-  .btn-red    { background:var(--red);    color:white; }
-  .btn-purple { background:var(--purple); color:white; }
-  .btn-amber  { background:var(--amber);  color:white; }
-  .btn-ghost  { background:#f1f5f9; color:var(--dark); }
-  .btn-sm  { padding:6px 12px; font-size:.8rem; border-radius:8px; }
-  .btn-lg  { padding:14px 28px; font-size:1rem; border-radius:14px; width:100%; }
+  .btn{border:none;border-radius:12px;padding:10px 18px;font-family:'Nunito',sans-serif;font-weight:800;font-size:.9rem;cursor:pointer;transition:all .2s;}
+  .btn:hover{opacity:.88;transform:translateY(-1px);}
+  .btn:active{transform:translateY(0);}
+  .btn-blue{background:var(--blue);color:white;}
+  .btn-green{background:var(--green);color:white;}
+  .btn-red{background:var(--red);color:white;}
+  .btn-purple{background:var(--purple);color:white;}
+  .btn-amber{background:var(--amber);color:white;}
+  .btn-teal{background:#0d9488;color:white;}
+  .btn-ghost{background:#f1f5f9;color:var(--dark);}
+  .btn-sm{padding:6px 12px;font-size:.78rem;border-radius:8px;}
+  .btn-lg{padding:14px 28px;font-size:1rem;border-radius:14px;width:100%;}
 
-  .wallet-card { background:linear-gradient(135deg,#667eea,#764ba2); color:white; border-radius:20px; padding:28px; box-shadow:0 8px 32px rgba(102,126,234,.4); margin-bottom:24px; position:relative; overflow:hidden; }
-  .wallet-card::before { content:''; position:absolute; top:-40px; right:-40px; width:140px; height:140px; border-radius:50%; background:rgba(255,255,255,.1); }
-  .wallet-label { font-size:.85rem; opacity:.85; font-weight:600; text-transform:uppercase; letter-spacing:1px; }
-  .wallet-pts { font-family:'Fredoka One',cursive; font-size:3rem; line-height:1; }
-  .wallet-money { font-size:1.1rem; opacity:.85; font-weight:700; }
+  .wallet-card{background:linear-gradient(135deg,#667eea,#764ba2);color:white;border-radius:20px;padding:24px;box-shadow:0 8px 32px rgba(102,126,234,.4);margin-bottom:20px;position:relative;overflow:hidden;}
+  .wallet-card::before{content:'';position:absolute;top:-40px;right:-40px;width:130px;height:130px;border-radius:50%;background:rgba(255,255,255,.1);}
+  .wallet-label{font-size:.8rem;opacity:.85;font-weight:600;text-transform:uppercase;letter-spacing:1px;}
+  .wallet-pts{font-family:'Fredoka One',cursive;font-size:2.8rem;line-height:1;}
+  .wallet-money{font-size:1rem;opacity:.85;font-weight:700;}
 
-  .tabs { display:flex; gap:8px; margin-bottom:24px; background:white; padding:6px; border-radius:14px; box-shadow:var(--shadow); flex-wrap:wrap; }
-  .tab { flex:1; padding:10px 6px; border:none; border-radius:10px; font-family:'Nunito',sans-serif; font-weight:700; font-size:.8rem; cursor:pointer; transition:all .2s; background:transparent; color:var(--mid); white-space:nowrap; }
-  .tab.active { background:var(--blue); color:white; }
+  .tabs{display:flex;gap:6px;margin-bottom:20px;background:white;padding:5px;border-radius:14px;box-shadow:var(--shadow);flex-wrap:wrap;}
+  .tab{flex:1;padding:9px 4px;border:none;border-radius:10px;font-family:'Nunito',sans-serif;font-weight:700;font-size:.78rem;cursor:pointer;transition:all .2s;background:transparent;color:var(--mid);white-space:nowrap;}
+  .tab.active{background:var(--blue);color:white;}
 
-  .child-selector { display:flex; gap:10px; margin-bottom:24px; flex-wrap:wrap; }
-  .child-pill { display:flex; align-items:center; gap:8px; padding:10px 18px; border-radius:99px; border:2px solid #e2e8f0; background:white; font-weight:700; cursor:pointer; transition:all .2s; font-family:'Nunito',sans-serif; font-size:.9rem; }
-  .child-pill.active { border-color:var(--blue); background:var(--sky); color:var(--blue); }
+  .child-selector{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;}
+  .child-pill{display:flex;align-items:center;gap:7px;padding:8px 16px;border-radius:99px;border:2px solid #e2e8f0;background:white;font-weight:700;cursor:pointer;transition:all .2s;font-family:'Nunito',sans-serif;font-size:.88rem;}
+  .child-pill.active{border-color:var(--blue);background:var(--sky);color:var(--blue);}
 
-  .screen-select { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:24px; background:linear-gradient(160deg,#e0f2fe 0%,#ede9fe 100%); padding:40px 20px; }
-  .screen-select-title { font-family:'Fredoka One',cursive; font-size:2.4rem; color:var(--dark); text-align:center; }
-  .screen-select-sub { color:var(--mid); font-weight:600; text-align:center; }
-  .profile-cards { display:flex; gap:16px; flex-wrap:wrap; justify-content:center; }
-  .profile-card { background:white; border-radius:20px; padding:24px 20px; box-shadow:var(--shadow-lg); text-align:center; cursor:pointer; transition:all .25s; border:3px solid transparent; min-width:120px; display:flex; flex-direction:column; align-items:center; gap:8px; }
-  .profile-card:hover { transform:translateY(-4px); border-color:var(--blue); }
-  .profile-card .profile-name { font-weight:800; font-size:1rem; }
-  .profile-card .profile-role { font-size:.78rem; color:var(--mid); font-weight:600; }
-  .profile-card.parent-card { background:linear-gradient(135deg,#1e293b,#334155); color:white; }
-  .profile-card.parent-card .profile-role { color:#94a3b8; }
+  /* ── Calendar ── */
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;}
+  .cal-header{text-align:center;font-size:.72rem;font-weight:800;color:var(--mid);padding:4px 0;}
+  .cal-cell{border-radius:10px;padding:6px 4px;min-height:64px;background:#f8fafc;border:2px solid transparent;cursor:pointer;transition:all .15s;position:relative;}
+  .cal-cell:hover{border-color:var(--blue);}
+  .cal-cell.today{border-color:var(--amber);background:var(--yellow);}
+  .cal-cell.has-care{background:var(--mint);}
+  .cal-cell.today.has-care{background:#bbf7d0;border-color:var(--amber);}
+  .cal-day-num{font-size:.72rem;font-weight:800;color:var(--mid);margin-bottom:3px;}
+  .cal-avatars{display:flex;flex-wrap:wrap;gap:2px;justify-content:center;}
+  .cal-chore-dot{width:6px;height:6px;border-radius:50%;background:var(--blue);display:inline-block;margin:1px;}
+  .week-label{font-family:'Fredoka One',cursive;font-size:1rem;color:var(--dark);margin:10px 0 6px;display:flex;align-items:center;gap:8px;}
 
-  .pin-display { display:flex; gap:12px; justify-content:center; margin:20px 0; }
-  .pin-dot { width:16px; height:16px; border-radius:50%; background:#e2e8f0; transition:background .2s; }
-  .pin-dot.filled { background:var(--blue); }
-  .pin-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; max-width:240px; margin:0 auto; }
-  .pin-key { padding:18px; border:2px solid #e2e8f0; border-radius:14px; background:white; font-family:'Fredoka One',cursive; font-size:1.4rem; cursor:pointer; transition:all .15s; text-align:center; }
-  .pin-key:hover { background:var(--sky); border-color:var(--blue); }
-  .pin-key:active { transform:scale(.95); }
-  .pin-error { color:var(--red); font-weight:700; text-align:center; font-size:.9rem; }
+  /* Day detail panel */
+  .day-panel{background:white;border-radius:var(--radius);padding:18px;box-shadow:var(--shadow-lg);margin-bottom:16px;border-left:4px solid var(--blue);}
+  .day-panel-title{font-family:'Fredoka One',cursive;font-size:1.1rem;margin-bottom:12px;}
+  .care-toggle{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+  .care-chip{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;border:2px solid #e2e8f0;cursor:pointer;font-weight:700;font-size:.82rem;transition:all .15s;}
+  .care-chip.active{border-color:var(--green);background:var(--mint);color:#065f46;}
 
-  .stats-row { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:24px; }
-  .stat-box { background:white; border-radius:14px; padding:16px; text-align:center; box-shadow:var(--shadow); }
-  .stat-val { font-family:'Fredoka One',cursive; font-size:1.6rem; color:var(--blue); }
-  .stat-label { font-size:.75rem; color:var(--mid); font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
+  /* Screen select */
+  .screen-select{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;background:linear-gradient(160deg,#e0f2fe 0%,#ede9fe 100%);padding:40px 16px;}
+  .screen-select-title{font-family:'Fredoka One',cursive;font-size:2.2rem;color:var(--dark);text-align:center;}
+  .profile-cards{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;}
+  .profile-card{background:white;border-radius:20px;padding:22px 18px;box-shadow:var(--shadow-lg);text-align:center;cursor:pointer;transition:all .25s;border:3px solid transparent;min-width:110px;display:flex;flex-direction:column;align-items:center;gap:7px;}
+  .profile-card:hover{transform:translateY(-4px);border-color:var(--blue);}
+  .profile-card .profile-name{font-weight:800;font-size:.95rem;}
+  .profile-card .profile-role{font-size:.75rem;color:var(--mid);font-weight:600;}
+  .profile-card.parent-card{background:linear-gradient(135deg,#1e293b,#334155);color:white;}
+  .profile-card.parent-card .profile-role{color:#94a3b8;}
 
-  .empty { text-align:center; padding:40px 20px; color:var(--mid); }
-  .empty-icon { font-size:3rem; margin-bottom:12px; }
-  .empty-text { font-weight:700; font-size:1rem; }
-  .empty-sub { font-size:.85rem; margin-top:4px; }
+  .pin-display{display:flex;gap:12px;justify-content:center;margin:18px 0;}
+  .pin-dot{width:16px;height:16px;border-radius:50%;background:#e2e8f0;transition:background .2s;}
+  .pin-dot.filled{background:var(--blue);}
+  .pin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:240px;margin:0 auto;}
+  .pin-key{padding:16px;border:2px solid #e2e8f0;border-radius:14px;background:white;font-family:'Fredoka One',cursive;font-size:1.4rem;cursor:pointer;transition:all .15s;text-align:center;}
+  .pin-key:hover{background:var(--sky);border-color:var(--blue);}
+  .pin-key:active{transform:scale(.95);}
+  .pin-error{color:var(--red);font-weight:700;text-align:center;font-size:.9rem;}
 
-  .status { display:inline-block; border-radius:20px; padding:3px 12px; font-size:.75rem; font-weight:800; }
-  .status-pending  { background:var(--yellow); color:#92400e; }
-  .status-approved { background:var(--mint);   color:#065f46; }
-  .status-rejected { background:#fee2e2;        color:#991b1b; }
+  .stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;}
+  .stat-box{background:white;border-radius:14px;padding:14px;text-align:center;box-shadow:var(--shadow);}
+  .stat-val{font-family:'Fredoka One',cursive;font-size:1.5rem;color:var(--blue);}
+  .stat-label{font-size:.72rem;color:var(--mid);font-weight:700;text-transform:uppercase;letter-spacing:.5px;}
 
-  .distribute-row { display:flex; align-items:center; gap:12px; padding:14px; background:#f8fafc; border-radius:12px; margin-bottom:10px; }
-  .distribute-info { flex:1; }
-  .distribute-input { width:80px; padding:8px 10px; border:2px solid #e2e8f0; border-radius:10px; font-family:'Nunito',sans-serif; font-weight:700; text-align:center; font-size:.95rem; outline:none; }
-  .distribute-input:focus { border-color:var(--blue); }
+  .empty{text-align:center;padding:36px 20px;color:var(--mid);}
+  .empty-icon{font-size:2.8rem;margin-bottom:10px;}
+  .empty-text{font-weight:700;}
+  .empty-sub{font-size:.85rem;margin-top:4px;}
 
-  .photo-upload { border:2px dashed #e2e8f0; border-radius:14px; padding:24px; text-align:center; cursor:pointer; transition:border-color .2s; }
-  .photo-upload:hover { border-color:var(--blue); }
-  .photo-preview { max-width:100%; border-radius:10px; margin-top:10px; }
+  .status{display:inline-block;border-radius:20px;padding:3px 12px;font-size:.72rem;font-weight:800;}
+  .status-pending{background:var(--yellow);color:#92400e;}
+  .status-approved{background:var(--mint);color:#065f46;}
+  .status-rejected{background:#fee2e2;color:#991b1b;}
 
-  .notif-dot { background:var(--red); color:white; border-radius:50%; width:20px; height:20px; font-size:.7rem; font-weight:900; display:inline-flex; align-items:center; justify-content:center; }
+  .distribute-row{display:flex;align-items:center;gap:10px;padding:12px;background:#f8fafc;border-radius:12px;margin-bottom:8px;}
+  .distribute-info{flex:1;}
+  .distribute-input{width:76px;padding:8px;border:2px solid #e2e8f0;border-radius:10px;font-family:'Nunito',sans-serif;font-weight:700;text-align:center;font-size:.92rem;outline:none;}
+  .distribute-input:focus{border-color:var(--blue);}
 
-  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:200; display:flex; align-items:center; justify-content:center; padding:20px; backdrop-filter:blur(4px); }
-  .modal { background:white; border-radius:20px; padding:28px; width:100%; max-width:480px; box-shadow:var(--shadow-lg); max-height:90vh; overflow-y:auto; }
-  .modal-title { font-family:'Fredoka One',cursive; font-size:1.4rem; margin-bottom:20px; }
+  .photo-upload{border:2px dashed #e2e8f0;border-radius:14px;padding:22px;text-align:center;cursor:pointer;transition:border-color .2s;}
+  .photo-upload:hover{border-color:var(--blue);}
+  .photo-preview{max-width:100%;border-radius:10px;margin-top:10px;}
 
-  .form-group { margin-bottom:16px; }
-  .form-label { font-weight:700; font-size:.85rem; color:var(--mid); margin-bottom:6px; display:block; }
-  .form-input { width:100%; padding:12px 14px; border:2px solid #e2e8f0; border-radius:12px; font-family:'Nunito',sans-serif; font-size:.95rem; font-weight:600; outline:none; transition:border-color .2s; color:var(--dark); }
-  .form-input:focus { border-color:var(--blue); }
-  .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .checkbox-label { display:flex; align-items:center; gap:10px; font-weight:700; cursor:pointer; }
-  .checkbox-label input { width:18px; height:18px; cursor:pointer; }
+  .notif-dot{background:var(--red);color:white;border-radius:50%;width:20px;height:20px;font-size:.7rem;font-weight:900;display:inline-flex;align-items:center;justify-content:center;}
 
-  .divider { height:1px; background:#f1f5f9; margin:20px 0; }
-  .flex-between { display:flex; justify-content:space-between; align-items:center; }
-  .mb-0 { margin-bottom:0; }
-  .text-mid { color:var(--mid); }
-  .text-sm { font-size:.85rem; }
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px);}
+  .modal{background:white;border-radius:20px;padding:24px;width:100%;max-width:480px;box-shadow:var(--shadow-lg);max-height:92vh;overflow-y:auto;}
+  .modal-title{font-family:'Fredoka One',cursive;font-size:1.3rem;margin-bottom:18px;}
+
+  .form-group{margin-bottom:14px;}
+  .form-label{font-weight:700;font-size:.82rem;color:var(--mid);margin-bottom:5px;display:block;}
+  .form-input{width:100%;padding:11px 13px;border:2px solid #e2e8f0;border-radius:12px;font-family:'Nunito',sans-serif;font-size:.92rem;font-weight:600;outline:none;transition:border-color .2s;color:var(--dark);}
+  .form-input:focus{border-color:var(--blue);}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .checkbox-label{display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer;}
+  .checkbox-label input{width:17px;height:17px;cursor:pointer;}
+
+  .divider{height:1px;background:#f1f5f9;margin:18px 0;}
+  .flex-between{display:flex;justify-content:space-between;align-items:center;}
+  .mb-0{margin-bottom:0;}
+  .text-mid{color:var(--mid);}
+  .text-sm{font-size:.85rem;}
+  .gap-8{gap:8px;}
+
+  /* value badge */
+  .val-badge{display:inline-flex;align-items:center;gap:4px;background:var(--yellow);color:#92400e;border-radius:20px;padding:2px 9px;font-size:.75rem;font-weight:800;}
 `;
 
-// ─── PinModal (parent) ────────────────────────────────────────────────────────
+// ─── PIN Modals ───────────────────────────────────────────────────────────────
 function PinModal({ user, onSuccess, onCancel }) {
-  const [pin, setPin] = useState(""); const [err, setErr] = useState(false);
-  const press = k => {
-    if (k === "del") { setPin(p => p.slice(0,-1)); setErr(false); return; }
-    const n = pin + k; if (n.length > 4) return; setPin(n);
-    if (n.length === 4) { if (n === user.pin) onSuccess(); else { setErr(true); setTimeout(() => { setPin(""); setErr(false); }, 600); } }
+  const [pin,setPin]=useState(""); const [err,setErr]=useState(false);
+  const press=k=>{
+    if(k==="del"){setPin(p=>p.slice(0,-1));setErr(false);return;}
+    const n=pin+k; if(n.length>4)return; setPin(n);
+    if(n.length===4){if(n===user.pin)onSuccess();else{setErr(true);setTimeout(()=>{setPin("");setErr(false);},600);}}
   };
-  return (
-    <div className="modal-overlay">
-      <div className="modal" style={{ textAlign:"center" }}>
-        <div style={{ marginBottom:12 }}><Av photo={user.photo} emoji={user.avatar || "👤"} size={60} /></div>
-        <div className="modal-title">Parent Portal</div>
-        <div className="text-sm text-mid" style={{ marginBottom:16, fontWeight:600 }}>PIN for {user.name}</div>
-        <div className="pin-display">{[0,1,2,3].map(i => <div key={i} className={`pin-dot ${pin.length > i ? "filled" : ""}`} />)}</div>
-        {err && <div className="pin-error" style={{ marginBottom:8 }}>Incorrect PIN</div>}
-        <div className="pin-grid">{["1","2","3","4","5","6","7","8","9","","0","del"].map((k,i) => <div key={i} className="pin-key" onClick={() => k && press(k)}>{k==="del"?"⌫":k}</div>)}</div>
-        <button className="btn btn-ghost" style={{ marginTop:20, width:"100%" }} onClick={onCancel}>Cancel</button>
-      </div>
-    </div>
+  return(
+    <div className="modal-overlay"><div className="modal" style={{textAlign:"center"}}>
+      <div style={{marginBottom:12}}><Av photo={user.photo} emoji={user.avatar||"👤"} size={60}/></div>
+      <div className="modal-title">Parent Portal</div>
+      <div className="text-sm text-mid" style={{marginBottom:16,fontWeight:600}}>PIN for {user.name}</div>
+      <div className="pin-display">{[0,1,2,3].map(i=><div key={i} className={`pin-dot ${pin.length>i?"filled":""}`}/>)}</div>
+      {err&&<div className="pin-error" style={{marginBottom:8}}>Incorrect PIN</div>}
+      <div className="pin-grid">{["1","2","3","4","5","6","7","8","9","","0","del"].map((k,i)=><div key={i} className="pin-key" onClick={()=>k&&press(k)}>{k==="del"?"⌫":k}</div>)}</div>
+      <button className="btn btn-ghost" style={{marginTop:18,width:"100%"}} onClick={onCancel}>Cancel</button>
+    </div></div>
   );
 }
-
-// ─── ChildPinModal ────────────────────────────────────────────────────────────
 function ChildPinModal({ child, onSuccess, onCancel }) {
-  const [pin, setPin] = useState(""); const [err, setErr] = useState(false);
-  const press = k => {
-    if (k === "del") { setPin(p => p.slice(0,-1)); setErr(false); return; }
-    const n = pin + k; if (n.length > 4) return; setPin(n);
-    if (n.length === 4) { if (n === child.pin) onSuccess(); else { setErr(true); setTimeout(() => { setPin(""); setErr(false); }, 600); } }
+  const [pin,setPin]=useState(""); const [err,setErr]=useState(false);
+  const press=k=>{
+    if(k==="del"){setPin(p=>p.slice(0,-1));setErr(false);return;}
+    const n=pin+k; if(n.length>4)return; setPin(n);
+    if(n.length===4){if(n===child.pin)onSuccess();else{setErr(true);setTimeout(()=>{setPin("");setErr(false);},600);}}
   };
-  return (
-    <div className="modal-overlay">
-      <div className="modal" style={{ textAlign:"center" }}>
-        <div style={{ marginBottom:12 }}><Av photo={child.photo} emoji={child.avatar} size={64} /></div>
-        <div className="modal-title">Hi {child.name}! 👋</div>
-        <div className="text-sm text-mid" style={{ marginBottom:16, fontWeight:600 }}>Enter your PIN</div>
-        <div className="pin-display">{[0,1,2,3].map(i => <div key={i} className={`pin-dot ${pin.length > i ? "filled" : ""}`} />)}</div>
-        {err && <div className="pin-error" style={{ marginBottom:8 }}>Wrong PIN, try again!</div>}
-        <div className="pin-grid">{["1","2","3","4","5","6","7","8","9","","0","del"].map((k,i) => <div key={i} className="pin-key" onClick={() => k && press(k)}>{k==="del"?"⌫":k}</div>)}</div>
-        <button className="btn btn-ghost" style={{ marginTop:20, width:"100%" }} onClick={onCancel}>Cancel</button>
-      </div>
-    </div>
+  return(
+    <div className="modal-overlay"><div className="modal" style={{textAlign:"center"}}>
+      <div style={{marginBottom:12}}><Av photo={child.photo} emoji={child.avatar} size={64}/></div>
+      <div className="modal-title">Hi {child.name}! 👋</div>
+      <div className="text-sm text-mid" style={{marginBottom:16,fontWeight:600}}>Enter your PIN</div>
+      <div className="pin-display">{[0,1,2,3].map(i=><div key={i} className={`pin-dot ${pin.length>i?"filled":""}`}/>)}</div>
+      {err&&<div className="pin-error" style={{marginBottom:8}}>Wrong PIN!</div>}
+      <div className="pin-grid">{["1","2","3","4","5","6","7","8","9","","0","del"].map((k,i)=><div key={i} className="pin-key" onClick={()=>k&&press(k)}>{k==="del"?"⌫":k}</div>)}</div>
+      <button className="btn btn-ghost" style={{marginTop:18,width:"100%"}} onClick={onCancel}>Cancel</button>
+    </div></div>
   );
 }
 
 // ─── AddChoreModal ────────────────────────────────────────────────────────────
 function AddChoreModal({ children, onSave, onClose }) {
-  const [f, setF] = useState({ title:"", icon:"⭐", points:2, requiresPhoto:false, assignedTo:"all", recurring:true });
-  const icons = ["⭐","🍽️","🧹","🗑️","🛏️","🪴","🐕","🚗","👕","🧺","🪣","🪟","🍳","🧼","📚"];
-  const set = (k,v) => setF(p => ({...p,[k]:v}));
-  return (
+  const [f,setF]=useState({title:"",icon:"⭐",points:2,requiresPhoto:false,recurring:true});
+  const icons=["⭐","🍽️","🧹","🗑️","🛏️","🪴","🐕","🚗","👕","🧺","🪣","🪟","🍳","🧼","📚","🐾","🌿","🧽","🪥","🛒"];
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  return(
     <div className="modal-overlay"><div className="modal">
       <div className="modal-title">✨ New Chore</div>
       <div className="form-group">
         <label className="form-label">Icon</label>
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          {icons.map(ic => <div key={ic} onClick={() => set("icon",ic)} style={{ fontSize:"1.6rem", cursor:"pointer", padding:6, borderRadius:10, background:f.icon===ic?"#dbeafe":"#f1f5f9", border:f.icon===ic?"2px solid #3b82f6":"2px solid transparent" }}>{ic}</div>)}
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {icons.map(ic=><div key={ic} onClick={()=>set("icon",ic)} style={{fontSize:"1.5rem",cursor:"pointer",padding:5,borderRadius:9,background:f.icon===ic?"#dbeafe":"#f1f5f9",border:f.icon===ic?"2px solid #3b82f6":"2px solid transparent"}}>{ic}</div>)}
         </div>
       </div>
-      <div className="form-group"><label className="form-label">Chore Name</label><input className="form-input" value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Wash Dishes" /></div>
+      <div className="form-group"><label className="form-label">Chore Name</label><input className="form-input" value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Wash Dishes"/></div>
       <div className="form-row">
-        <div className="form-group mb-0"><label className="form-label">Points</label><input className="form-input" type="number" min="1" max="50" value={f.points} onChange={e=>set("points",+e.target.value)} /></div>
-        <div className="form-group mb-0"><label className="form-label">Assigned To</label>
-          <select className="form-input" value={f.assignedTo} onChange={e=>set("assignedTo",e.target.value)}>
-            <option value="all">All Children</option>
-            {children.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        <div className="form-group mb-0"><label className="form-label">Points</label><input className="form-input" type="number" min="1" max="100" value={f.points} onChange={e=>set("points",+e.target.value)}/></div>
+        <div className="form-group mb-0">
+          <label className="form-label">Type</label>
+          <select className="form-input" value={f.recurring?"recurring":"oneoff"} onChange={e=>set("recurring",e.target.value==="recurring")}>
+            <option value="recurring">🔄 Recurring</option>
+            <option value="oneoff">🎯 One-off</option>
           </select>
         </div>
       </div>
-      <div style={{ display:"flex", gap:20, marginTop:16, marginBottom:16 }}>
-        <label className="checkbox-label"><input type="checkbox" checked={f.requiresPhoto} onChange={e=>set("requiresPhoto",e.target.checked)} />📸 Photo Required</label>
-        <label className="checkbox-label"><input type="checkbox" checked={f.recurring} onChange={e=>set("recurring",e.target.checked)} />🔄 Recurring</label>
+      <div style={{marginTop:12,marginBottom:14}}>
+        <label className="checkbox-label"><input type="checkbox" checked={f.requiresPhoto} onChange={e=>set("requiresPhoto",e.target.checked)}/>📸 Photo Required</label>
       </div>
-      <div style={{ display:"flex", gap:10 }}>
-        <button className="btn btn-blue" style={{ flex:1 }} onClick={() => f.title && onSave(f)}>Save Chore</button>
+      <div style={{display:"flex",gap:8}}>
+        <button className="btn btn-blue" style={{flex:1}} onClick={()=>f.title&&onSave(f)}>Save Chore</button>
         <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
       </div>
     </div></div>
@@ -302,22 +344,22 @@ function AddChoreModal({ children, onSave, onClose }) {
 
 // ─── AddBankModal ─────────────────────────────────────────────────────────────
 function AddBankModal({ childId, onSave, onClose }) {
-  const [f, setF] = useState({ name:"", icon:"🏦", type:"recurring", costPoints:5, reward:"" });
-  const icons = ["🏦","📱","🎮","🎬","🍦","🎪","📚","🚲","👟","🎁","✈️","🎨","🎵","🏀","⭐"];
-  const set = (k,v) => setF(p => ({...p,[k]:v}));
-  return (
+  const [f,setF]=useState({name:"",icon:"🏦",type:"recurring",costPoints:5,reward:""});
+  const icons=["🏦","📱","🎮","🎬","🍦","🎪","📚","🚲","👟","🎁","✈️","🎨","🎵","🏀","⭐"];
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  return(
     <div className="modal-overlay"><div className="modal">
       <div className="modal-title">🏦 New Savings Bank</div>
       <div className="form-group">
         <label className="form-label">Icon</label>
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          {icons.map(ic => <div key={ic} onClick={() => set("icon",ic)} style={{ fontSize:"1.6rem", cursor:"pointer", padding:6, borderRadius:10, background:f.icon===ic?"#dbeafe":"#f1f5f9", border:f.icon===ic?"2px solid #3b82f6":"2px solid transparent" }}>{ic}</div>)}
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {icons.map(ic=><div key={ic} onClick={()=>set("icon",ic)} style={{fontSize:"1.5rem",cursor:"pointer",padding:5,borderRadius:9,background:f.icon===ic?"#dbeafe":"#f1f5f9",border:f.icon===ic?"2px solid #3b82f6":"2px solid transparent"}}>{ic}</div>)}
         </div>
       </div>
-      <div className="form-group"><label className="form-label">Bank Name</label><input className="form-input" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Screen Time" /></div>
-      <div className="form-group"><label className="form-label">Reward Description</label><input className="form-input" value={f.reward} onChange={e=>set("reward",e.target.value)} placeholder="e.g. 15 min screen time" /></div>
+      <div className="form-group"><label className="form-label">Bank Name</label><input className="form-input" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Screen Time"/></div>
+      <div className="form-group"><label className="form-label">Reward</label><input className="form-input" value={f.reward} onChange={e=>set("reward",e.target.value)} placeholder="e.g. 15 min screen time"/></div>
       <div className="form-row">
-        <div className="form-group mb-0"><label className="form-label">Points Needed</label><input className="form-input" type="number" min="1" value={f.costPoints} onChange={e=>set("costPoints",+e.target.value)} /></div>
+        <div className="form-group mb-0"><label className="form-label">Points Needed</label><input className="form-input" type="number" min="1" value={f.costPoints} onChange={e=>set("costPoints",+e.target.value)}/></div>
         <div className="form-group mb-0"><label className="form-label">Type</label>
           <select className="form-input" value={f.type} onChange={e=>set("type",e.target.value)}>
             <option value="recurring">🔄 Recurring</option>
@@ -325,8 +367,8 @@ function AddBankModal({ childId, onSave, onClose }) {
           </select>
         </div>
       </div>
-      <div style={{ display:"flex", gap:10, marginTop:16 }}>
-        <button className="btn btn-purple" style={{ flex:1 }} onClick={() => f.name && f.reward && onSave({...f, childId, savedPoints:0})}>Save Bank</button>
+      <div style={{display:"flex",gap:8,marginTop:14}}>
+        <button className="btn btn-purple" style={{flex:1}} onClick={()=>f.name&&f.reward&&onSave({...f,childId,savedPoints:0})}>Save Bank</button>
         <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
       </div>
     </div></div>
@@ -335,21 +377,20 @@ function AddBankModal({ childId, onSave, onClose }) {
 
 // ─── AddChildModal ────────────────────────────────────────────────────────────
 function AddChildModal({ onSave, onClose }) {
-  const [name, setName] = useState(""); const [emoji, setEmoji] = useState("🦁");
-  const [photo, setPhoto] = useState(null); const [pin, setPin] = useState("");
-  const emojiList = ["🦁","🐯","🦊","🐨","🐼","🐸","🦄","🐙","🦋","🐬","🦖","🐧","🦅","🐻","🦝"];
-  return (
+  const [name,setName]=useState(""); const [emoji,setEmoji]=useState("🦁");
+  const [photo,setPhoto]=useState(null); const [pin,setPin]=useState("");
+  const emojiList=["🦁","🐯","🦊","🐨","🐼","🐸","🦄","🐙","🦋","🐬","🦖","🐧","🦅","🐻","🦝"];
+  return(
     <div className="modal-overlay"><div className="modal">
       <div className="modal-title">👦 Add Child</div>
-      <AvatarPicker photo={photo} emoji={emoji} emojiList={emojiList} onPhoto={setPhoto} onEmoji={setEmoji} />
-      <div className="form-group"><label className="form-label">Child's Name</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Alex" /></div>
+      <AvatarPicker photo={photo} emoji={emoji} emojiList={emojiList} onPhoto={setPhoto} onEmoji={setEmoji}/>
+      <div className="form-group"><label className="form-label">Name</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Alex"/></div>
       <div className="form-group">
         <label className="form-label">PIN — 4 digits (optional)</label>
-        <input className="form-input" type="password" maxLength={4} placeholder="Leave blank for no PIN" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))} />
-        <div style={{ fontSize:".8rem", color:"var(--mid)", fontWeight:600, marginTop:4 }}>If set, child must enter PIN to log in.</div>
+        <input className="form-input" type="password" maxLength={4} placeholder="Leave blank for no PIN" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))}/>
       </div>
-      <div style={{ display:"flex", gap:10 }}>
-        <button className="btn btn-green" style={{ flex:1 }} onClick={() => name && onSave({ name, avatar:emoji, photo, walletPoints:0, pin:pin.length===4?pin:null })}>Add Child</button>
+      <div style={{display:"flex",gap:8}}>
+        <button className="btn btn-green" style={{flex:1}} onClick={()=>name&&onSave({name,avatar:emoji,photo,walletPoints:0,pin:pin.length===4?pin:null})}>Add Child</button>
         <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
       </div>
     </div></div>
@@ -358,17 +399,17 @@ function AddChildModal({ onSave, onClose }) {
 
 // ─── AddParentModal ───────────────────────────────────────────────────────────
 function AddParentModal({ onSave, onClose }) {
-  const [name, setName] = useState(""); const [pin, setPin] = useState("");
-  const [emoji, setEmoji] = useState("👤"); const [photo, setPhoto] = useState(null);
-  const emojiList = ["👤","👨","👩","🧔","👴","👵","🧑","👨‍💼","👩‍💼","🦸","🦹","🧙","🧑‍🍳","👮","🧑‍🏫"];
-  return (
+  const [name,setName]=useState(""); const [pin,setPin]=useState("");
+  const [emoji,setEmoji]=useState("👤"); const [photo,setPhoto]=useState(null);
+  const emojiList=["👤","👨","👩","🧔","👴","👵","🧑","👨‍💼","👩‍💼","🦸","🦹","🧙","🧑‍🍳","👮","🧑‍🏫"];
+  return(
     <div className="modal-overlay"><div className="modal">
       <div className="modal-title">👤 Add Parent</div>
-      <AvatarPicker photo={photo} emoji={emoji} emojiList={emojiList} onPhoto={setPhoto} onEmoji={setEmoji} />
-      <div className="form-group"><label className="form-label">Parent Name</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Mum" /></div>
-      <div className="form-group"><label className="form-label">4-Digit PIN</label><input className="form-input" type="password" maxLength={4} value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="••••" /></div>
-      <div style={{ display:"flex", gap:10 }}>
-        <button className="btn btn-blue" style={{ flex:1 }} onClick={() => name && pin.length===4 && onSave({ name, pin, photo, avatar:emoji })}>Add Parent</button>
+      <AvatarPicker photo={photo} emoji={emoji} emojiList={emojiList} onPhoto={setPhoto} onEmoji={setEmoji}/>
+      <div className="form-group"><label className="form-label">Name</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Mum"/></div>
+      <div className="form-group"><label className="form-label">4-Digit PIN</label><input className="form-input" type="password" maxLength={4} value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="••••"/></div>
+      <div style={{display:"flex",gap:8}}>
+        <button className="btn btn-blue" style={{flex:1}} onClick={()=>name&&pin.length===4&&onSave({name,pin,photo,avatar:emoji})}>Add Parent</button>
         <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
       </div>
     </div></div>
@@ -376,32 +417,33 @@ function AddParentModal({ onSave, onClose }) {
 }
 
 // ─── ApprovalCard ─────────────────────────────────────────────────────────────
-function ApprovalCard({ req, child, chore, onApprove, onReject }) {
-  const [showPhoto, setShowPhoto] = useState(false);
-  return (
+function ApprovalCard({ req, child, chore, rate, onApprove, onReject }) {
+  const [showPhoto,setShowPhoto]=useState(false);
+  return(
     <div className={`request-card ${req.status}`}>
-      <div style={{ fontSize:"2rem" }}>{chore?.icon||"📋"}</div>
+      <div style={{fontSize:"1.8rem"}}>{chore?.icon||"📋"}</div>
       <div className="request-info">
-        <div className="request-child"><Av photo={child?.photo} emoji={child?.avatar} size={18} />{child?.name}</div>
-        <div className="request-chore">{chore?.title||"Unknown chore"}</div>
-        <div className="request-time">{req.time} · <span className={`status status-${req.status}`}>{req.status}</span></div>
-        {req.photo && <div style={{ fontSize:".8rem", color:"#3b82f6", fontWeight:700, cursor:"pointer", marginTop:4 }} onClick={() => setShowPhoto(true)}>📸 View Photo</div>}
+        <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600,display:"flex",alignItems:"center",gap:5}}><Av photo={child?.photo} emoji={child?.avatar} size={16}/>{child?.name}</div>
+        <div style={{fontWeight:800}}>{chore?.title||"Unknown chore"}</div>
+        <div style={{fontSize:".72rem",color:"var(--mid)"}}>{req.time} · <span className={`status status-${req.status}`}>{req.status}</span></div>
+        {req.photo&&<div style={{fontSize:".78rem",color:"#3b82f6",fontWeight:700,cursor:"pointer",marginTop:3}} onClick={()=>setShowPhoto(true)}>📸 View Photo</div>}
       </div>
-      <div style={{ textAlign:"right" }}>
-        <div style={{ fontWeight:800, color:"#f59e0b", marginBottom:8 }}>{pts(chore?.points||0)}</div>
-        {req.status==="pending" && (
-          <div style={{ display:"flex", gap:6, justifyContent:"flex-end" }}>
+      <div style={{textAlign:"right"}}>
+        <div style={{fontWeight:800,color:"var(--amber)",marginBottom:4}}>{pts(chore?.points||0)}</div>
+        <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(chore?.points||0,rate)}</div>
+        {req.status==="pending"&&(
+          <div style={{display:"flex",gap:5,justifyContent:"flex-end",marginTop:6}}>
             <button className="btn btn-green btn-sm" onClick={onApprove}>✓ Yes</button>
             <button className="btn btn-red btn-sm" onClick={onReject}>✗ No</button>
           </div>
         )}
       </div>
-      {showPhoto && req.photo && (
-        <div className="modal-overlay" onClick={() => setShowPhoto(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+      {showPhoto&&req.photo&&(
+        <div className="modal-overlay" onClick={()=>setShowPhoto(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
             <div className="modal-title">📸 Photo Evidence</div>
-            <img src={req.photo} alt="Evidence" className="photo-preview" />
-            <button className="btn btn-ghost btn-lg" style={{ marginTop:16 }} onClick={() => setShowPhoto(false)}>Close</button>
+            <img src={req.photo} alt="Evidence" className="photo-preview"/>
+            <button className="btn btn-ghost btn-lg" style={{marginTop:14}} onClick={()=>setShowPhoto(false)}>Close</button>
           </div>
         </div>
       )}
@@ -411,274 +453,511 @@ function ApprovalCard({ req, child, chore, onApprove, onReject }) {
 
 // ─── EditParentInline ─────────────────────────────────────────────────────────
 function EditParentInline({ parent, onSave }) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState(parent.name);
-  const [emoji, setEmoji] = useState(parent.avatar || "👤");
-  const [photo, setPhoto] = useState(parent.photo || null);
-  const [curPin, setCur] = useState(""); const [newPin, setNew] = useState(""); const [conf, setConf] = useState("");
-  const [err, setErr] = useState(""); const [ok, setOk] = useState(false);
-  const emojiList = ["👤","👨","👩","🧔","👴","👵","🧑","👨‍💼","👩‍💼","🦸","🦹","🧙","🧑‍🍳","👮","🧑‍🏫"];
-
-  const save = () => {
+  const [open,setOpen]=useState(false);
+  const [name,setName]=useState(parent.name);
+  const [emoji,setEmoji]=useState(parent.avatar||"👤");
+  const [photo,setPhoto]=useState(parent.photo||null);
+  const [curPin,setCur]=useState(""); const [newPin,setNew]=useState(""); const [conf,setConf]=useState("");
+  const [err,setErr]=useState(""); const [ok,setOk]=useState(false);
+  const emojiList=["👤","👨","👩","🧔","👴","👵","🧑","👨‍💼","👩‍💼","🦸","🦹","🧙","🧑‍🍳","👮","🧑‍🏫"];
+  const save=()=>{
     setErr("");
-    if (!name.trim()) { setErr("Name can't be empty."); return; }
-    let finalPin = undefined;
-    if (newPin || curPin || conf) {
-      const stored = loadData().parents.find(p => p.id === parent.id);
-      if (curPin !== stored?.pin) { setErr("Current PIN is incorrect."); return; }
-      if (newPin.length !== 4)   { setErr("New PIN must be 4 digits."); return; }
-      if (newPin !== conf)        { setErr("PINs don't match."); return; }
-      finalPin = newPin;
+    if(!name.trim()){setErr("Name can't be empty.");return;}
+    let finalPin=undefined;
+    if(newPin||curPin||conf){
+      const stored=loadData().parents.find(p=>p.id===parent.id);
+      if(curPin!==stored?.pin){setErr("Current PIN is incorrect.");return;}
+      if(newPin.length!==4){setErr("New PIN must be 4 digits.");return;}
+      if(newPin!==conf){setErr("PINs don't match.");return;}
+      finalPin=newPin;
     }
-    onSave({ name: name.trim(), photo, avatar: emoji, pin: finalPin });
-    setOk(true); setTimeout(() => { setOpen(false); setOk(false); setCur(""); setNew(""); setConf(""); }, 900);
+    onSave({name:name.trim(),photo,avatar:emoji,pin:finalPin});
+    setOk(true);setTimeout(()=>{setOpen(false);setOk(false);setCur("");setNew("");setConf("");},900);
   };
-
-  if (!open) return <button className="btn btn-ghost btn-sm" style={{ width:"100%", marginTop:10 }} onClick={() => setOpen(true)}>✏️ Edit Profile & PIN</button>;
-
-  return (
-    <div style={{ background:"#f8fafc", borderRadius:12, padding:16, marginTop:10 }}>
-      <div style={{ fontWeight:800, marginBottom:12 }}>✏️ Edit Profile</div>
-      <AvatarPicker photo={photo} emoji={emoji} emojiList={emojiList} onPhoto={setPhoto} onEmoji={setEmoji} />
-      <div className="form-group"><label className="form-label">Display Name</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} /></div>
-      <div style={{ fontWeight:700, fontSize:".85rem", color:"var(--mid)", marginBottom:10 }}>Change PIN (leave blank to keep current)</div>
-      <div className="form-row" style={{ marginBottom:10 }}>
-        <div><label className="form-label">Current PIN</label><input className="form-input" type="password" maxLength={4} placeholder="••••" value={curPin} onChange={e=>setCur(e.target.value.replace(/\D/g,"").slice(0,4))} /></div>
-        <div><label className="form-label">New PIN</label><input className="form-input" type="password" maxLength={4} placeholder="••••" value={newPin} onChange={e=>setNew(e.target.value.replace(/\D/g,"").slice(0,4))} /></div>
+  if(!open)return <button className="btn btn-ghost btn-sm" style={{width:"100%",marginTop:10}} onClick={()=>setOpen(true)}>✏️ Edit Profile & PIN</button>;
+  return(
+    <div style={{background:"#f8fafc",borderRadius:12,padding:14,marginTop:10}}>
+      <div style={{fontWeight:800,marginBottom:12}}>✏️ Edit Profile</div>
+      <AvatarPicker photo={photo} emoji={emoji} emojiList={emojiList} onPhoto={setPhoto} onEmoji={setEmoji}/>
+      <div className="form-group"><label className="form-label">Display Name</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)}/></div>
+      <div style={{fontWeight:700,fontSize:".82rem",color:"var(--mid)",marginBottom:8}}>Change PIN (leave blank to keep current)</div>
+      <div className="form-row" style={{marginBottom:10}}>
+        <div><label className="form-label">Current PIN</label><input className="form-input" type="password" maxLength={4} placeholder="••••" value={curPin} onChange={e=>setCur(e.target.value.replace(/\D/g,"").slice(0,4))}/></div>
+        <div><label className="form-label">New PIN</label><input className="form-input" type="password" maxLength={4} placeholder="••••" value={newPin} onChange={e=>setNew(e.target.value.replace(/\D/g,"").slice(0,4))}/></div>
       </div>
-      <div className="form-group"><label className="form-label">Confirm New PIN</label><input className="form-input" type="password" maxLength={4} placeholder="••••" value={conf} onChange={e=>setConf(e.target.value.replace(/\D/g,"").slice(0,4))} /></div>
-      {err && <div style={{ color:"var(--red)", fontWeight:700, fontSize:".85rem", marginBottom:8 }}>{err}</div>}
-      {ok  && <div style={{ color:"var(--green)", fontWeight:700, fontSize:".85rem", marginBottom:8 }}>✅ Saved!</div>}
-      <div style={{ display:"flex", gap:8 }}>
-        <button className="btn btn-blue btn-sm" onClick={save}>Save</button>
-        <button className="btn btn-ghost btn-sm" onClick={() => { setOpen(false); setErr(""); }}>Cancel</button>
-      </div>
+      <div className="form-group"><label className="form-label">Confirm New PIN</label><input className="form-input" type="password" maxLength={4} placeholder="••••" value={conf} onChange={e=>setConf(e.target.value.replace(/\D/g,"").slice(0,4))}/></div>
+      {err&&<div style={{color:"var(--red)",fontWeight:700,fontSize:".82rem",marginBottom:8}}>{err}</div>}
+      {ok&&<div style={{color:"var(--green)",fontWeight:700,fontSize:".82rem",marginBottom:8}}>✅ Saved!</div>}
+      <div style={{display:"flex",gap:8}}><button className="btn btn-blue btn-sm" onClick={save}>Save</button><button className="btn btn-ghost btn-sm" onClick={()=>{setOpen(false);setErr("");}}>Cancel</button></div>
     </div>
   );
 }
 
 // ─── EditChildInline ──────────────────────────────────────────────────────────
 function EditChildInline({ child, onSave }) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState(child.name);
-  const [emoji, setEmoji] = useState(child.avatar);
-  const [photo, setPhoto] = useState(child.photo || null);
-  const [newPin, setNew] = useState(""); const [conf, setConf] = useState("");
-  const [err, setErr] = useState(""); const [ok, setOk] = useState(false);
-  const emojiList = ["🦁","🐯","🦊","🐨","🐼","🐸","🦄","🐙","🦋","🐬","🦖","🐧","🦅","🐻","🦝"];
+  const [open,setOpen]=useState(false);
+  const [name,setName]=useState(child.name);
+  const [emoji,setEmoji]=useState(child.avatar);
+  const [photo,setPhoto]=useState(child.photo||null);
+  const [newPin,setNew]=useState(""); const [conf,setConf]=useState("");
+  const [err,setErr]=useState(""); const [ok,setOk]=useState(false);
+  const emojiList=["🦁","🐯","🦊","🐨","🐼","🐸","🦄","🐙","🦋","🐬","🦖","🐧","🦅","🐻","🦝"];
+  const save=()=>{
+    setErr(""); if(!name.trim()){setErr("Name can't be empty.");return;}
+    let pin=child.pin;
+    if(newPin||conf){if(newPin.length!==4){setErr("PIN must be 4 digits.");return;}if(newPin!==conf){setErr("PINs don't match.");return;}pin=newPin;}
+    onSave({name:name.trim(),avatar:emoji,photo,pin});
+    setOk(true);setTimeout(()=>{setOpen(false);setOk(false);setNew("");setConf("");},900);
+  };
+  if(!open)return <button className="btn btn-ghost btn-sm" style={{marginTop:10}} onClick={()=>setOpen(true)}>✏️ Edit / Manage PIN</button>;
+  return(
+    <div style={{background:"#f8fafc",borderRadius:12,padding:14,marginTop:10}}>
+      <div style={{fontWeight:800,marginBottom:12}}>✏️ Edit {child.name}</div>
+      <AvatarPicker photo={photo} emoji={emoji} emojiList={emojiList} onPhoto={setPhoto} onEmoji={setEmoji}/>
+      <div className="form-group"><label className="form-label">Name</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)}/></div>
+      <div style={{fontWeight:700,fontSize:".82rem",marginBottom:8}}>Child PIN — {child.pin?<span style={{color:"var(--green)"}}>🔒 Active</span>:<span style={{color:"var(--mid)"}}>No PIN</span>}</div>
+      <div className="form-row" style={{marginBottom:10}}>
+        <div><label className="form-label">{child.pin?"New PIN":"Set PIN"}</label><input className="form-input" type="password" maxLength={4} placeholder="••••" value={newPin} onChange={e=>setNew(e.target.value.replace(/\D/g,"").slice(0,4))}/></div>
+        <div><label className="form-label">Confirm</label><input className="form-input" type="password" maxLength={4} placeholder="••••" value={conf} onChange={e=>setConf(e.target.value.replace(/\D/g,"").slice(0,4))}/></div>
+      </div>
+      {err&&<div style={{color:"var(--red)",fontWeight:700,fontSize:".82rem",marginBottom:8}}>{err}</div>}
+      {ok&&<div style={{color:"var(--green)",fontWeight:700,fontSize:".82rem",marginBottom:8}}>✅ Saved!</div>}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button className="btn btn-blue btn-sm" onClick={save}>Save</button>
+        {child.pin&&<button className="btn btn-amber btn-sm" onClick={()=>{onSave({name:child.name,avatar:child.avatar,photo:child.photo,pin:null});setOpen(false);}}>Remove PIN</button>}
+        <button className="btn btn-ghost btn-sm" onClick={()=>{setOpen(false);setErr("");}}>Cancel</button>
+      </div>
+    </div>
+  );
+}
 
-  const save = () => {
-    setErr("");
-    if (!name.trim()) { setErr("Name can't be empty."); return; }
-    let pin = child.pin;
-    if (newPin || conf) {
-      if (newPin.length !== 4) { setErr("PIN must be 4 digits."); return; }
-      if (newPin !== conf)     { setErr("PINs don't match."); return; }
-      pin = newPin;
-    }
-    onSave({ name: name.trim(), avatar: emoji, photo, pin });
-    setOk(true); setTimeout(() => { setOpen(false); setOk(false); setNew(""); setConf(""); }, 900);
+// ─── Calendar Component ───────────────────────────────────────────────────────
+function CalendarView({ data, doUpdate, isParent, activeChildId }) {
+  const { settings, children, chores, careSchedule, choreSchedule } = data;
+  const [selectedSlot, setSelectedSlot] = useState(null); // {week, day}
+  const [addChoreSlot, setAddChoreSlot] = useState(null);  // slot key for chore assignment modal
+  const [choreChild, setChoreChild]     = useState(children[0]?.id || "");
+  const [choreId, setChoreId]           = useState(chores[0]?.id || "");
+
+  const dayLabels = buildDayLabels(settings.calendarStartDay);
+  const todaySlot = getTodaySlot(settings);
+  const rate = settings.pointValue || 0.5;
+
+  // Get absolute day index within fortnight (0-13) for a slot
+  const slotIndex = (week, day) => week * 7 + day;
+
+  // Get actual date for a slot (if fortnightStart is set)
+  const slotDate = (week, day) => {
+    if (!settings.fortnightStart) return null;
+    const anchor = new Date(settings.fortnightStart);
+    anchor.setHours(0,0,0,0);
+    const d = new Date(anchor);
+    d.setDate(anchor.getDate() + slotIndex(week, day));
+    return d;
   };
 
-  if (!open) return <button className="btn btn-ghost btn-sm" style={{ marginTop:10 }} onClick={() => setOpen(true)}>✏️ Edit / Manage PIN</button>;
+  const formatSlotDate = (week, day) => {
+    const d = slotDate(week, day);
+    if (!d) return "";
+    return d.toLocaleDateString("en-AU", { day:"numeric", month:"short" });
+  };
 
+  const toggleCare = (slot, childId) => {
+    doUpdate(d => {
+      const current = d.careSchedule[slot] || [];
+      const next = current.includes(childId)
+        ? current.filter(x => x !== childId)
+        : [...current, childId];
+      return { ...d, careSchedule: { ...d.careSchedule, [slot]: next } };
+    });
+  };
+
+  const addChoreToSlot = () => {
+    if (!addChoreSlot || !choreChild || !choreId) return;
+    doUpdate(d => ({
+      ...d,
+      choreSchedule: [...(d.choreSchedule||[]).filter(x => !(x.slot===addChoreSlot&&x.childId===choreChild&&x.choreId===choreId)),
+        { slot: addChoreSlot, childId: choreChild, choreId }]
+    }));
+    setAddChoreSlot(null);
+  };
+
+  const removeChoreFromSlot = (slot, childId, choreId) => {
+    doUpdate(d => ({ ...d, choreSchedule: (d.choreSchedule||[]).filter(x => !(x.slot===slot&&x.childId===childId&&x.choreId===choreId)) }));
+  };
+
+  const setFortnightStart = (dateStr) => {
+    doUpdate(d => ({ ...d, settings: { ...d.settings, fortnightStart: dateStr } }));
+  };
+
+  const setStartDay = (day) => {
+    doUpdate(d => ({ ...d, settings: { ...d.settings, calendarStartDay: day } }));
+  };
+
+  // For child view: filter chores assigned to this child on today's slot
+  const todayChores = todaySlot
+    ? (choreSchedule||[]).filter(x => x.slot === slotKey(todaySlot.week, todaySlot.day) && x.childId === activeChildId)
+    : [];
+
+  if (!isParent) {
+    // Child view — show today's scheduled chores
+    return (
+      <div>
+        <div className="section-title">📅 Today's Scheduled Chores</div>
+        {!settings.fortnightStart && (
+          <div className="empty"><div className="empty-icon">📅</div><div className="empty-text">Calendar not set up yet</div><div className="empty-sub">Ask a parent to set up the calendar.</div></div>
+        )}
+        {settings.fortnightStart && todayChores.length === 0 && (
+          <div className="empty"><div className="empty-icon">🎉</div><div className="empty-text">No scheduled chores today!</div><div className="empty-sub">Check the Chores tab for general chores.</div></div>
+        )}
+        {todayChores.map(cs => {
+          const chore = chores.find(c => c.id === cs.choreId);
+          if (!chore) return null;
+          return (
+            <div key={cs.choreId} className="chore-card" style={{ flexDirection:"row", alignItems:"center", marginBottom:10 }}>
+              <div style={{ fontSize:"2rem", marginRight:12 }}>{chore.icon}</div>
+              <div style={{ flex:1 }}>
+                <div style={{ fontWeight:800 }}>{chore.title}</div>
+                <div style={{ color:"var(--amber)", fontWeight:800, fontSize:".85rem" }}>⭐ {pts(chore.points)} · {money(chore.points, rate)}</div>
+              </div>
+              <span className="tag tag-cal">📅 Today</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // Parent calendar view
   return (
-    <div style={{ background:"#f8fafc", borderRadius:12, padding:16, marginTop:10 }}>
-      <div style={{ fontWeight:800, marginBottom:12 }}>✏️ Edit {child.name}</div>
-      <AvatarPicker photo={photo} emoji={emoji} emojiList={emojiList} onPhoto={setPhoto} onEmoji={setEmoji} />
-      <div className="form-group"><label className="form-label">Name</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} /></div>
-      <div style={{ fontWeight:700, fontSize:".85rem", marginBottom:8 }}>
-        Child's PIN — {child.pin ? <span style={{ color:"var(--green)" }}>🔒 Active</span> : <span style={{ color:"var(--mid)" }}>No PIN set</span>}
+    <div>
+      {/* Settings bar */}
+      <div className="card" style={{ marginBottom:16 }}>
+        <div className="flex-between" style={{ flexWrap:"wrap", gap:12 }}>
+          <div>
+            <div className="form-label">Calendar Start Day</div>
+            <div style={{ display:"flex", gap:8, marginTop:4 }}>
+              {["Mon","Sun"].map(d => (
+                <button key={d} className={`btn btn-sm ${settings.calendarStartDay===d?"btn-blue":"btn-ghost"}`} onClick={()=>setStartDay(d)}>{d}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ flex:1, minWidth:200 }}>
+            <div className="form-label">Fortnight Cycle Start Date</div>
+            <input type="date" className="form-input" style={{ marginTop:4 }}
+              value={settings.fortnightStart||""}
+              onChange={e=>setFortnightStart(e.target.value)}/>
+            <div style={{ fontSize:".75rem", color:"var(--mid)", fontWeight:600, marginTop:3 }}>Set to the first day of Week 1 of your fortnight cycle.</div>
+          </div>
+        </div>
       </div>
-      <div className="form-row" style={{ marginBottom:10 }}>
-        <div><label className="form-label">{child.pin ? "New PIN" : "Set PIN"}</label><input className="form-input" type="password" maxLength={4} placeholder="••••" value={newPin} onChange={e=>setNew(e.target.value.replace(/\D/g,"").slice(0,4))} /></div>
-        <div><label className="form-label">Confirm PIN</label><input className="form-input" type="password" maxLength={4} placeholder="••••" value={conf} onChange={e=>setConf(e.target.value.replace(/\D/g,"").slice(0,4))} /></div>
-      </div>
-      {err && <div style={{ color:"var(--red)", fontWeight:700, fontSize:".85rem", marginBottom:8 }}>{err}</div>}
-      {ok  && <div style={{ color:"var(--green)", fontWeight:700, fontSize:".85rem", marginBottom:8 }}>✅ Saved!</div>}
-      <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-        <button className="btn btn-blue btn-sm" onClick={save}>Save</button>
-        {child.pin && <button className="btn btn-amber btn-sm" onClick={() => { onSave({ name:child.name, avatar:child.avatar, photo:child.photo, pin:null }); setOpen(false); }}>Remove PIN</button>}
-        <button className="btn btn-ghost btn-sm" onClick={() => { setOpen(false); setErr(""); }}>Cancel</button>
-      </div>
+
+      {/* 2-week grid */}
+      {[0,1].map(week => (
+        <div key={week}>
+          <div className="week-label">
+            <span style={{ background: week===0?"var(--blue)":"var(--purple)", color:"white", borderRadius:8, padding:"2px 12px", fontSize:".85rem" }}>
+              Week {week+1}
+            </span>
+            {todaySlot?.week===week && <span style={{ fontSize:".8rem", color:"var(--amber)", fontWeight:800 }}>← this week</span>}
+          </div>
+          <div className="cal-grid">
+            {dayLabels.map(d => <div key={d} className="cal-header">{d}</div>)}
+          </div>
+          <div className="cal-grid" style={{ marginBottom:8 }}>
+            {[0,1,2,3,4,5,6].map(day => {
+              const sk = slotKey(week, day);
+              const careKids = careSchedule[sk] || [];
+              const dayChores = (choreSchedule||[]).filter(x => x.slot===sk);
+              const isToday = todaySlot?.week===week && todaySlot?.day===day;
+              const isSel = selectedSlot?.week===week && selectedSlot?.day===day;
+              return (
+                <div key={day}
+                  className={`cal-cell ${isToday?"today":""} ${careKids.length>0?"has-care":""}`}
+                  style={{ border: isSel ? "2px solid var(--blue)" : "", background: isSel ? "#eff6ff" : "" }}
+                  onClick={() => setSelectedSlot(isSel ? null : {week, day})}>
+                  <div className="cal-day-num">{formatSlotDate(week,day) || dayLabels[day]}</div>
+                  <div className="cal-avatars">
+                    {careKids.map(cid => {
+                      const c = children.find(x=>x.id===cid);
+                      return c ? <Av key={cid} photo={c.photo} emoji={c.avatar} size={20}/> : null;
+                    })}
+                  </div>
+                  {dayChores.length > 0 && (
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:2, justifyContent:"center", marginTop:3 }}>
+                      {dayChores.slice(0,4).map((x,i) => <div key={i} className="cal-chore-dot"/>)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Day detail panel */}
+          {selectedSlot?.week===week && (
+            <div className="day-panel">
+              <div className="day-panel-title">
+                {dayLabels[selectedSlot.day]} — {formatSlotDate(selectedSlot.week, selectedSlot.day) || `Week ${week+1}, Day ${selectedSlot.day+1}`}
+                {todaySlot?.week===selectedSlot.week && todaySlot?.day===selectedSlot.day && <span style={{ marginLeft:8, color:"var(--amber)", fontSize:".85rem" }}>📍 Today</span>}
+              </div>
+
+              {/* Care schedule */}
+              <div style={{ fontWeight:700, fontSize:".82rem", color:"var(--mid)", marginBottom:6 }}>👨‍👧 In Care Today</div>
+              <div className="care-toggle">
+                {children.map(child => {
+                  const sk = slotKey(selectedSlot.week, selectedSlot.day);
+                  const active = (careSchedule[sk]||[]).includes(child.id);
+                  return (
+                    <div key={child.id} className={`care-chip ${active?"active":""}`} onClick={()=>toggleCare(sk, child.id)}>
+                      <Av photo={child.photo} emoji={child.avatar} size={22}/>
+                      {child.name}
+                      {active && " ✓"}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Assigned chores for this day */}
+              <div style={{ fontWeight:700, fontSize:".82rem", color:"var(--mid)", marginBottom:6 }}>🧹 Scheduled Chores</div>
+              {(choreSchedule||[]).filter(x=>x.slot===slotKey(selectedSlot.week,selectedSlot.day)).length===0 && (
+                <div style={{ fontSize:".82rem", color:"var(--mid)", marginBottom:8 }}>No chores scheduled for this day.</div>
+              )}
+              {(choreSchedule||[]).filter(x=>x.slot===slotKey(selectedSlot.week,selectedSlot.day)).map((cs,i) => {
+                const chore = chores.find(c=>c.id===cs.choreId);
+                const child = children.find(c=>c.id===cs.childId);
+                return (
+                  <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", background:"#f8fafc", borderRadius:10, marginBottom:6 }}>
+                    <span style={{ fontSize:"1.2rem" }}>{chore?.icon}</span>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:700, fontSize:".88rem" }}>{chore?.title}</div>
+                      <div style={{ fontSize:".75rem", color:"var(--mid)" }}>{child?.avatar} {child?.name} · {pts(chore?.points||0)} · {money(chore?.points||0,rate)}</div>
+                    </div>
+                    <button className="btn btn-red btn-sm" onClick={()=>removeChoreFromSlot(cs.slot,cs.childId,cs.choreId)}>✕</button>
+                  </div>
+                );
+              })}
+              <button className="btn btn-teal btn-sm" style={{ marginTop:4 }} onClick={()=>setAddChoreSlot(slotKey(selectedSlot.week,selectedSlot.day))}>+ Assign Chore</button>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {/* Assign chore modal */}
+      {addChoreSlot && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="modal-title">📅 Assign Chore to Day</div>
+            <div className="form-group">
+              <label className="form-label">Child</label>
+              <select className="form-input" value={choreChild} onChange={e=>setChoreChild(e.target.value)}>
+                {children.map(c=><option key={c.id} value={c.id}>{c.avatar} {c.name}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Chore</label>
+              <select className="form-input" value={choreId} onChange={e=>setChoreId(e.target.value)}>
+                {chores.map(c=><option key={c.id} value={c.id}>{c.icon} {c.title} ({pts(c.points)})</option>)}
+              </select>
+            </div>
+            <div style={{ background:"var(--sky)", borderRadius:10, padding:10, fontSize:".82rem", fontWeight:700, color:"var(--blue)", marginBottom:14 }}>
+              This chore will appear in {children.find(c=>c.id===choreChild)?.name}'s schedule every fortnight on this day.
+            </div>
+            <div style={{ display:"flex", gap:8 }}>
+              <button className="btn btn-teal" style={{ flex:1 }} onClick={addChoreToSlot}>Assign Chore</button>
+              <button className="btn btn-ghost" onClick={()=>setAddChoreSlot(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [data, setData]             = useState(loadData);
-  const [screen, setScreen]         = useState("home");
-  const [activeUser, setActiveUser] = useState(null);
-  const [pendingLogin, setPending]  = useState(null);
-  const [childTab, setChildTab]     = useState("chores");
-  const [parentTab, setParentTab]   = useState("approvals");
-  const [selChild, setSelChild]     = useState(null);
-  const [modal, setModal]           = useState(null);
-  const [claimChore, setClaimChore] = useState(null);
-  const [claimPhoto, setClaimPhoto] = useState(null);
-  const [distAmts, setDistAmts]     = useState({});
-  const [giftChild, setGiftChild]   = useState(null);
-  const [giftPts, setGiftPts]       = useState("");
-  const [giftNote, setGiftNote]     = useState("");
+  const [data,setData]             = useState(loadData);
+  const [screen,setScreen]         = useState("home");
+  const [activeUser,setActiveUser] = useState(null);
+  const [pendingLogin,setPending]  = useState(null);
+  const [childTab,setChildTab]     = useState("chores");
+  const [parentTab,setParentTab]   = useState("approvals");
+  const [selChild,setSelChild]     = useState(null);
+  const [modal,setModal]           = useState(null);
+  const [claimChore,setClaimChore] = useState(null);
+  const [claimPhoto,setClaimPhoto] = useState(null);
+  const [distAmts,setDistAmts]     = useState({});
+  const [giftChild,setGiftChild]   = useState(null);
+  const [giftPts,setGiftPts]       = useState("");
+  const [giftNote,setGiftNote]     = useState("");
+  const [redeemNudge,setRedeemNudge] = useState(null); // bankId pending confirmation
+
+  const rate = data.settings?.pointValue || 0.5;
 
   const doUpdate = fn => {
     let next;
-    setData(d => { next = fn(d); saveData(next); return next; });
-    // sync active user
-    setTimeout(() => {
-      if (!next || !activeUser) return;
-      if (screen === "child") { const c = next.children.find(x => x.id === activeUser.id); if (c) setActiveUser(c); }
-      if (screen === "parent") { const p = next.parents.find(x => x.id === activeUser.id); if (p) setActiveUser(p); }
-    }, 0);
+    setData(d=>{next=fn(d);saveData(next);return next;});
+    setTimeout(()=>{
+      if(!next||!activeUser)return;
+      if(screen==="child"){const c=next.children.find(x=>x.id===activeUser.id);if(c)setActiveUser(c);}
+      if(screen==="parent"){const p=next.parents.find(x=>x.id===activeUser.id);if(p)setActiveUser(p);}
+    },0);
   };
 
-  // Derived
-  const myChores  = activeUser && screen==="child" ? data.chores.filter(c => c.assignedTo==="all" || c.assignedTo===activeUser.id) : [];
-  const myBanks   = activeUser && screen==="child" ? data.banks.filter(b => b.childId===activeUser.id) : [];
-  const myHistory = activeUser && screen==="child" ? data.choreRequests.filter(r => r.childId===activeUser.id) : [];
-  const childBanks = selChild ? data.banks.filter(b => b.childId===selChild) : [];
+  const myChores  = activeUser&&screen==="child" ? data.chores : [];
+  const myBanks   = activeUser&&screen==="child" ? data.banks.filter(b=>b.childId===activeUser.id) : [];
+  const myHistory = activeUser&&screen==="child" ? data.choreRequests.filter(r=>r.childId===activeUser.id) : [];
+  const childBanks = selChild ? data.banks.filter(b=>b.childId===selChild) : [];
 
   // Login
-  const handleSelectParent = p => { setPending({ type:"parent", user:p }); setModal("pin"); };
-  const handleSelectChild  = c => {
-    if (c.pin) { setPending({ type:"child", user:c }); setModal("childPin"); }
-    else { setActiveUser(c); setScreen("child"); setChildTab("chores"); }
+  const handleSelectParent = p=>{setPending({type:"parent",user:p});setModal("pin");};
+  const handleSelectChild  = c=>{
+    if(c.pin){setPending({type:"child",user:c});setModal("childPin");}
+    else{setActiveUser(c);setScreen("child");setChildTab("chores");}
   };
-  const handleParentPinOk = () => {
-    const fresh = loadData().parents.find(p => p.id===pendingLogin.user.id) || pendingLogin.user;
-    setActiveUser(fresh); setScreen("parent"); setModal(null); setPending(null);
-    setSelChild(data.children[0]?.id || null);
+  const handleParentPinOk=()=>{
+    const fresh=loadData().parents.find(p=>p.id===pendingLogin.user.id)||pendingLogin.user;
+    setActiveUser(fresh);setScreen("parent");setModal(null);setPending(null);
+    setSelChild(data.children[0]?.id||null);
   };
-  const handleChildPinOk = () => {
-    const fresh = loadData().children.find(c => c.id===pendingLogin.user.id) || pendingLogin.user;
-    setActiveUser(fresh); setScreen("child"); setChildTab("chores"); setModal(null); setPending(null);
+  const handleChildPinOk=()=>{
+    const fresh=loadData().children.find(c=>c.id===pendingLogin.user.id)||pendingLogin.user;
+    setActiveUser(fresh);setScreen("child");setChildTab("chores");setModal(null);setPending(null);
   };
 
   // Chore claim
-  const handleClaimChore = chore => { setClaimChore(chore); setClaimPhoto(null); setModal("claimChore"); };
-  const handleSubmitClaim = () => {
-    if (!claimChore) return;
-    doUpdate(d => ({ ...d, choreRequests:[{ id:uid(), childId:activeUser.id, choreId:claimChore.id, status:"pending", time:now(), photo:claimPhoto }, ...d.choreRequests] }));
-    setModal(null); setClaimChore(null); setClaimPhoto(null);
+  const handleClaimChore=chore=>{setClaimChore(chore);setClaimPhoto(null);setModal("claimChore");};
+  const handleSubmitClaim=()=>{
+    if(!claimChore)return;
+    doUpdate(d=>({...d,choreRequests:[{id:uid(),childId:activeUser.id,choreId:claimChore.id,status:"pending",time:now(),photo:claimPhoto},...d.choreRequests]}));
+    setModal(null);setClaimChore(null);setClaimPhoto(null);
   };
 
-  // Approve / reject
-  const handleApprove = reqId => doUpdate(d => {
-    const req = d.choreRequests.find(r => r.id===reqId);
-    const chore = d.chores.find(c => c.id===req?.choreId);
-    if (!req || !chore) return d;
-    return { ...d, choreRequests:d.choreRequests.map(r => r.id===reqId ? {...r,status:"approved"} : r), children:d.children.map(c => c.id===req.childId ? {...c,walletPoints:c.walletPoints+chore.points} : c), transactions:[{id:uid(),childId:req.childId,type:"earn",points:chore.points,label:chore.title,time:now()},...d.transactions] };
+  const handleApprove=reqId=>doUpdate(d=>{
+    const req=d.choreRequests.find(r=>r.id===reqId);
+    const chore=d.chores.find(c=>c.id===req?.choreId);
+    if(!req||!chore)return d;
+    return{...d,choreRequests:d.choreRequests.map(r=>r.id===reqId?{...r,status:"approved"}:r),children:d.children.map(c=>c.id===req.childId?{...c,walletPoints:c.walletPoints+chore.points}:c),transactions:[{id:uid(),childId:req.childId,type:"earn",points:chore.points,label:chore.title,time:now()},...d.transactions]};
   });
-  const handleReject = reqId => doUpdate(d => ({ ...d, choreRequests:d.choreRequests.map(r => r.id===reqId ? {...r,status:"rejected"} : r) }));
+  const handleReject=reqId=>doUpdate(d=>({...d,choreRequests:d.choreRequests.map(r=>r.id===reqId?{...r,status:"rejected"}:r)}));
 
-  // Distribute
-  const handleDistribute = () => {
-    const child = data.children.find(c => c.id===activeUser.id);
-    const total = Object.values(distAmts).reduce((a,b) => a+(+b||0), 0);
-    if (total > child.walletPoints || total <= 0) return;
-    doUpdate(d => {
-      const banks = d.banks.map(b => { const add = +distAmts[b.id]||0; return add>0 ? {...b,savedPoints:b.savedPoints+add} : b; });
-      const txs = Object.entries(distAmts).filter(([,v])=>+v>0).map(([bid,v]) => { const b=d.banks.find(x=>x.id===bid); return {id:uid(),childId:activeUser.id,type:"save",points:-v,label:`→ ${b?.name}`,time:now()}; });
-      return { ...d, banks, children:d.children.map(c => c.id===activeUser.id ? {...c,walletPoints:c.walletPoints-total} : c), transactions:[...txs,...d.transactions] };
+  const handleDistribute=()=>{
+    const child=data.children.find(c=>c.id===activeUser.id);
+    const total=Object.values(distAmts).reduce((a,b)=>a+(+b||0),0);
+    if(total>child.walletPoints||total<=0)return;
+    doUpdate(d=>{
+      const banks=d.banks.map(b=>{const add=+distAmts[b.id]||0;return add>0?{...b,savedPoints:b.savedPoints+add}:b;});
+      const txs=Object.entries(distAmts).filter(([,v])=>+v>0).map(([bid,v])=>{const b=d.banks.find(x=>x.id===bid);return{id:uid(),childId:activeUser.id,type:"save",points:-v,label:`→ ${b?.name}`,time:now()};});
+      return{...d,banks,children:d.children.map(c=>c.id===activeUser.id?{...c,walletPoints:c.walletPoints-total}:c),transactions:[...txs,...d.transactions]};
     });
     setDistAmts({});
   };
 
-  // Redeem
-  const handleRedeemBank = bankId => {
-    const bank = data.banks.find(b => b.id===bankId);
-    if (!bank || bank.savedPoints < bank.costPoints) return;
-    doUpdate(d => ({ ...d, banks:d.banks.map(b => b.id===bankId ? {...b,savedPoints:b.type==="recurring"?b.savedPoints-b.costPoints:0} : b), transactions:[{id:uid(),childId:bank.childId,type:"redeem",points:-bank.costPoints,label:`🎉 ${bank.reward}`,time:now()},...d.transactions] }));
+  const handleRedeemBank=bankId=>{
+    const bank=data.banks.find(b=>b.id===bankId);
+    if(!bank||bank.savedPoints<bank.costPoints)return;
+    doUpdate(d=>({
+      ...d,
+      banks:d.banks.map(b=>b.id===bankId?{...b,savedPoints:b.type==="recurring"?b.savedPoints-b.costPoints:0}:b),
+      transactions:[{
+        id:uid(),childId:bank.childId,type:"redeem",
+        points:-bank.costPoints,
+        label:`🎉 ${bank.reward}`,
+        bankId:bankId,
+        bankName:bank.name,
+        bankIcon:bank.icon,
+        time:now()
+      },...d.transactions]
+    }));
+    setRedeemNudge(null);
   };
 
-  // Gift
-  const handleGift = () => {
-    const p = +giftPts; if (!giftChild || p <= 0) return;
-    doUpdate(d => ({ ...d, children:d.children.map(c => c.id===giftChild ? {...c,walletPoints:c.walletPoints+p} : c), transactions:[{id:uid(),childId:giftChild,type:"gift",points:p,label:`🎁 ${giftNote||"Gift from Parent"}`,time:now()},...d.transactions] }));
-    setGiftChild(null); setGiftPts(""); setGiftNote("");
+  const handleGift=()=>{
+    const p=+giftPts; if(!giftChild||p<=0)return;
+    doUpdate(d=>({...d,children:d.children.map(c=>c.id===giftChild?{...c,walletPoints:c.walletPoints+p}:c),transactions:[{id:uid(),childId:giftChild,type:"gift",points:p,label:`🎁 ${giftNote||"Gift from Parent"}`,time:now()},...d.transactions]}));
+    setGiftChild(null);setGiftPts("");setGiftNote("");
   };
 
-  const photoInput = async e => { if (e.target.files[0]) setClaimPhoto(await readFile(e.target.files[0])); };
+  const photoInput=async e=>{if(e.target.files[0])setClaimPhoto(await readFile(e.target.files[0]));};
 
   // ══ HOME ══════════════════════════════════════════════════════════════════════
-  if (screen === "home") return (
+  if(screen==="home") return(
     <>
       <style>{styles}</style>
       <div className="screen-select">
-        <div style={{ textAlign:"center" }}>
-          <div style={{ fontSize:"4rem", marginBottom:8 }}>⭐</div>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:"3.5rem",marginBottom:6}}>⭐</div>
           <div className="screen-select-title">ChoreChart</div>
-          <div className="screen-select-sub">Earn points · Build good habits · Save for what you love</div>
+          <div style={{color:"var(--mid)",fontWeight:600,fontSize:".95rem"}}>Earn points · Build good habits · Save for what you love</div>
         </div>
         <div className="profile-cards">
-          {data.children.map(child => (
-            <div key={child.id} className="profile-card" onClick={() => handleSelectChild(child)}>
-              <Av photo={child.photo} emoji={child.avatar} size={56} />
+          {data.children.map(child=>(
+            <div key={child.id} className="profile-card" onClick={()=>handleSelectChild(child)}>
+              <Av photo={child.photo} emoji={child.avatar} size={54}/>
               <div className="profile-name">{child.name}</div>
-              <div className="profile-role">{child.pin ? "🔒 PIN protected" : "Tap to enter"}</div>
-              <div className="profile-role">⭐ {child.walletPoints} pts</div>
+              <div className="profile-role">{child.pin?"🔒 PIN protected":"Tap to enter"}</div>
+              <div className="profile-role">⭐ {child.walletPoints} pts · {money(child.walletPoints,rate)}</div>
             </div>
           ))}
-          {data.parents.map(parent => (
-            <div key={parent.id} className="profile-card parent-card" onClick={() => handleSelectParent(parent)}>
-              <Av photo={parent.photo} emoji={parent.avatar||"👤"} size={56} />
+          {data.parents.map(parent=>(
+            <div key={parent.id} className="profile-card parent-card" onClick={()=>handleSelectParent(parent)}>
+              <Av photo={parent.photo} emoji={parent.avatar||"👤"} size={54}/>
               <div className="profile-name">{parent.name}</div>
               <div className="profile-role">🔒 Parent Portal</div>
             </div>
           ))}
         </div>
-        {modal==="pin" && pendingLogin && <PinModal user={pendingLogin.user} onSuccess={handleParentPinOk} onCancel={() => { setModal(null); setPending(null); }} />}
-        {modal==="childPin" && pendingLogin && <ChildPinModal child={pendingLogin.user} onSuccess={handleChildPinOk} onCancel={() => { setModal(null); setPending(null); }} />}
+        {modal==="pin"&&pendingLogin&&<PinModal user={pendingLogin.user} onSuccess={handleParentPinOk} onCancel={()=>{setModal(null);setPending(null);}}/>}
+        {modal==="childPin"&&pendingLogin&&<ChildPinModal child={pendingLogin.user} onSuccess={handleChildPinOk} onCancel={()=>{setModal(null);setPending(null);}}/>}
       </div>
     </>
   );
 
   // ══ CHILD ═════════════════════════════════════════════════════════════════════
-  if (screen === "child") {
-    const child = data.children.find(c => c.id===activeUser.id) || activeUser;
-    return (
+  if(screen==="child"){
+    const child=data.children.find(c=>c.id===activeUser.id)||activeUser;
+    return(
       <>
         <style>{styles}</style>
         <div className="app">
           <nav className="nav">
-            <div className="nav-logo"><Av photo={child.photo} emoji={child.avatar} size={32} />{child.name}</div>
+            <div className="nav-logo"><Av photo={child.photo} emoji={child.avatar} size={30}/>{child.name}</div>
             <div className="nav-right">
-              <div className="nav-badge">⭐ {child.walletPoints} pts</div>
-              <button className="nav-btn ghost" onClick={() => setScreen("home")}>← Switch</button>
+              <div className="nav-badge">⭐ {child.walletPoints} · {money(child.walletPoints,rate)}</div>
+              <button className="nav-btn ghost" onClick={()=>setScreen("home")}>← Switch</button>
             </div>
           </nav>
           <div className="main">
             <div className="wallet-card">
               <div className="wallet-label">My Wallet</div>
-              <div className="wallet-pts">{child.walletPoints} <span style={{ fontSize:"1.5rem" }}>pts</span></div>
-              <div className="wallet-money">{money(child.walletPoints)} value</div>
+              <div className="wallet-pts">{child.walletPoints} <span style={{fontSize:"1.4rem"}}>pts</span></div>
+              <div className="wallet-money">{money(child.walletPoints,rate)} value · {rate*100}¢ per point</div>
             </div>
             <div className="tabs">
-              {[["chores","🧹 Chores"],["wallet","💰 Distribute"],["banks","🏦 Banks"],["history","📋 History"]].map(([t,l]) => (
-                <button key={t} className={`tab ${childTab===t?"active":""}`} onClick={() => setChildTab(t)}>{l}</button>
+              {[["chores","🧹 Chores"],["calendar","📅 Schedule"],["wallet","💰 Distribute"],["banks","🏦 Banks"],["history","📋 History"]].map(([t,l])=>(
+                <button key={t} className={`tab ${childTab===t?"active":""}`} onClick={()=>setChildTab(t)}>{l}</button>
               ))}
             </div>
 
             {/* CHORES */}
-            {childTab==="chores" && (
+            {childTab==="chores"&&(
               <>
                 <div className="section-title">🧹 Available Chores</div>
-                {myChores.length===0 && <div className="empty"><div className="empty-icon">🎉</div><div className="empty-text">No chores assigned!</div></div>}
+                {myChores.length===0&&<div className="empty"><div className="empty-icon">🎉</div><div className="empty-text">No chores yet!</div></div>}
                 <div className="card-grid">
-                  {myChores.map(chore => {
-                    const pend = data.choreRequests.find(r => r.childId===child.id && r.choreId===chore.id && r.status==="pending");
-                    return (
+                  {myChores.map(chore=>{
+                    const pend=data.choreRequests.find(r=>r.childId===child.id&&r.choreId===chore.id&&r.status==="pending");
+                    return(
                       <div key={chore.id} className="chore-card">
-                        <div className="chore-icon">{chore.icon}</div>
-                        <div className="chore-title">{chore.title}</div>
-                        <div className="chore-pts">⭐ {pts(chore.points)} · {money(chore.points)}</div>
-                        <div className="chore-tags">
-                          {chore.requiresPhoto && <span className="tag tag-photo">📸 Photo</span>}
-                          <span className={`tag ${chore.recurring?"tag-recurring":"tag-oneoff"}`}>{chore.recurring?"🔄 Recurring":"🎯 One-off"}</span>
+                        <div style={{fontSize:"2rem"}}>{chore.icon}</div>
+                        <div style={{fontWeight:800}}>{chore.title}</div>
+                        <div style={{color:"var(--amber)",fontWeight:800,fontSize:".85rem"}}>⭐ {pts(chore.points)}</div>
+                        <div style={{color:"var(--green)",fontWeight:800,fontSize:".85rem"}}>{money(chore.points,rate)}</div>
+                        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                          {chore.requiresPhoto&&<span className="tag tag-photo">📸 Photo</span>}
+                          <span className={`tag ${chore.recurring?"tag-recurring":"tag-oneoff"}`}>{chore.recurring?"🔄":"🎯"}</span>
                         </div>
-                        {pend ? <button className="btn btn-ghost btn-sm" disabled style={{ opacity:.6 }}>⏳ Pending</button>
-                               : <button className="btn btn-blue btn-sm" onClick={() => handleClaimChore(chore)}>Claim Chore</button>}
+                        {pend?<button className="btn btn-ghost btn-sm" disabled style={{opacity:.6}}>⏳ Pending</button>
+                             :<button className="btn btn-blue btn-sm" onClick={()=>handleClaimChore(chore)}>Claim Chore</button>}
                       </div>
                     );
                   })}
@@ -686,29 +965,34 @@ export default function App() {
               </>
             )}
 
+            {/* CALENDAR */}
+            {childTab==="calendar"&&(
+              <CalendarView data={data} doUpdate={doUpdate} isParent={false} activeChildId={child.id}/>
+            )}
+
             {/* DISTRIBUTE */}
-            {childTab==="wallet" && (
+            {childTab==="wallet"&&(
               <>
                 <div className="section-title">💰 Distribute Points</div>
-                {myBanks.length===0 && <div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No banks yet</div><div className="empty-sub">Ask a parent to create savings banks!</div></div>}
-                {myBanks.map(bank => {
-                  const pct = Math.min(100,(bank.savedPoints/bank.costPoints)*100);
-                  return (
+                {myBanks.length===0&&<div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No banks yet</div><div className="empty-sub">Ask a parent to set up savings banks!</div></div>}
+                {myBanks.map(bank=>{
+                  const pct=Math.min(100,(bank.savedPoints/bank.costPoints)*100);
+                  return(
                     <div key={bank.id} className="distribute-row">
-                      <div style={{ fontSize:"1.8rem" }}>{bank.icon}</div>
+                      <div style={{fontSize:"1.7rem"}}>{bank.icon}</div>
                       <div className="distribute-info">
-                        <div style={{ fontWeight:800 }}>{bank.name}</div>
-                        <div style={{ fontSize:".8rem", color:"var(--mid)", fontWeight:600 }}>{bank.savedPoints}/{bank.costPoints} pts</div>
-                        <div className="bank-progress" style={{ marginTop:4 }}><div className="bank-progress-fill" style={{ width:`${pct}%` }} /></div>
+                        <div style={{fontWeight:800}}>{bank.name}</div>
+                        <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>{bank.savedPoints}/{bank.costPoints} pts · {money(bank.savedPoints,rate)} / {money(bank.costPoints,rate)}</div>
+                        <div className="bank-progress" style={{marginTop:4}}><div className="bank-progress-fill" style={{width:`${pct}%`}}/></div>
                       </div>
-                      <input className="distribute-input" type="number" min="0" placeholder="0" value={distAmts[bank.id]||""} onChange={e=>setDistAmts(a=>({...a,[bank.id]:e.target.value}))} />
+                      <input className="distribute-input" type="number" min="0" placeholder="0" value={distAmts[bank.id]||""} onChange={e=>setDistAmts(a=>({...a,[bank.id]:e.target.value}))}/>
                     </div>
                   );
                 })}
-                {myBanks.length>0 && (
-                  <div style={{ marginTop:16 }}>
-                    <div style={{ marginBottom:10, fontWeight:700, color:"var(--mid)" }}>
-                      Moving: {Object.values(distAmts).reduce((a,b)=>a+(+b||0),0)} pts · Wallet after: {child.walletPoints - Object.values(distAmts).reduce((a,b)=>a+(+b||0),0)} pts
+                {myBanks.length>0&&(
+                  <div style={{marginTop:14}}>
+                    <div style={{marginBottom:10,fontWeight:700,color:"var(--mid)"}}>
+                      Moving: {Object.values(distAmts).reduce((a,b)=>a+(+b||0),0)} pts · Wallet after: {child.walletPoints-Object.values(distAmts).reduce((a,b)=>a+(+b||0),0)} pts
                     </div>
                     <button className="btn btn-purple btn-lg" onClick={handleDistribute}>💸 Distribute Points</button>
                   </div>
@@ -717,27 +1001,56 @@ export default function App() {
             )}
 
             {/* BANKS */}
-            {childTab==="banks" && (
+            {childTab==="banks"&&(
               <>
                 <div className="section-title">🏦 My Banks</div>
-                {myBanks.length===0 && <div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No banks yet</div></div>}
+                {myBanks.length===0&&<div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No banks yet</div></div>}
                 <div className="card-grid">
-                  {myBanks.map(bank => {
-                    const pct = Math.min(100,(bank.savedPoints/bank.costPoints)*100);
-                    return (
+                  {myBanks.map(bank=>{
+                    const pct=Math.min(100,(bank.savedPoints/bank.costPoints)*100);
+                    // tally: total redeemed from this specific bank
+                    const redeemTxs=data.transactions.filter(t=>t.childId===child.id&&t.type==="redeem"&&t.bankId===bank.id);
+                    const totalSpentPts=redeemTxs.reduce((a,t)=>a+Math.abs(t.points),0);
+                    const redeemCount=redeemTxs.length;
+                    // inspiration: find best goal bank for comparison
+                    const goalBanks=myBanks.filter(b=>b.type==="goal"&&b.id!==bank.id);
+                    const inspBank=goalBanks[0]||null;
+                    const inspPct=inspBank?Math.min(100,Math.round((totalSpentPts/inspBank.costPoints)*100)):0;
+                    return(
                       <div key={bank.id} className="bank-card">
-                        <div style={{ display:"flex", justifyContent:"space-between" }}>
-                          <div style={{ fontSize:"2rem" }}>{bank.icon}</div>
+                        <div style={{display:"flex",justifyContent:"space-between"}}>
+                          <div style={{fontSize:"1.8rem"}}>{bank.icon}</div>
                           <span className={`tag ${bank.type==="recurring"?"tag-recurring":"tag-oneoff"}`}>{bank.type==="recurring"?"🔄":"🎯"}</span>
                         </div>
-                        <div className="bank-name">{bank.name}</div>
-                        <div className="bank-reward">🎁 {bank.reward}</div>
-                        <div className="bank-progress"><div className="bank-progress-fill" style={{ width:`${pct}%` }} /></div>
+                        <div style={{fontWeight:800}}>{bank.name}</div>
+                        <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>🎁 {bank.reward}</div>
+                        <div className="bank-progress"><div className="bank-progress-fill" style={{width:`${pct}%`}}/></div>
                         <div className="flex-between">
-                          <div className="bank-saved">{bank.savedPoints}/{bank.costPoints} pts</div>
-                          <div style={{ fontSize:".8rem", color:"var(--mid)", fontWeight:600 }}>{pct.toFixed(0)}%</div>
+                          <div style={{fontWeight:800,color:"var(--green)",fontSize:".9rem"}}>{bank.savedPoints}/{bank.costPoints} pts</div>
+                          <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>{money(bank.savedPoints,rate)} / {money(bank.costPoints,rate)}</div>
                         </div>
-                        {bank.savedPoints>=bank.costPoints && <button className="btn btn-green btn-sm" onClick={() => handleRedeemBank(bank.id)}>🎉 Redeem!</button>}
+                        {/* Tally for recurring banks */}
+                        {bank.type==="recurring"&&redeemCount>0&&(
+                          <div style={{background:"#fef3c7",borderRadius:10,padding:"8px 10px",marginTop:2}}>
+                            <div style={{fontWeight:800,fontSize:".78rem",color:"#92400e"}}>
+                              💸 Total spent on {bank.name}
+                            </div>
+                            <div style={{fontWeight:800,fontSize:".92rem",color:"#b45309",marginTop:2}}>
+                              {totalSpentPts} pts · {money(totalSpentPts,rate)} · {redeemCount}x redeemed
+                            </div>
+                            {inspBank&&(
+                              <div style={{marginTop:6,fontSize:".75rem",color:"#78350f",fontWeight:700,lineHeight:1.4}}>
+                                💡 If you'd saved this instead, you'd be <span style={{color:"var(--green)"}}>{inspPct}%</span> of the way to your <strong>{inspBank.name}</strong> goal {inspBank.icon}
+                              </div>
+                            )}
+                            {!inspBank&&totalSpentPts>0&&(
+                              <div style={{marginTop:6,fontSize:".75rem",color:"#78350f",fontWeight:700,lineHeight:1.4}}>
+                                💡 That's {money(totalSpentPts,rate)} — ask a parent to set up a savings goal so you can see what you could have instead!
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {bank.savedPoints>=bank.costPoints&&<button className="btn btn-green btn-sm" onClick={()=>setRedeemNudge(bank.id)}>🎉 Redeem!</button>}
                       </div>
                     );
                   })}
@@ -746,29 +1059,53 @@ export default function App() {
             )}
 
             {/* HISTORY */}
-            {childTab==="history" && (
+            {childTab==="history"&&(
               <>
                 <div className="section-title">📋 History</div>
-                {myHistory.length===0 && data.transactions.filter(t=>t.childId===child.id&&t.type==="gift").length===0 && <div className="empty"><div className="empty-icon">📋</div><div className="empty-text">No history yet</div></div>}
+                {(() => {
+                  // Merge all transaction types + chore requests into one sorted timeline
+                  const redeemTxs = data.transactions.filter(t=>t.childId===child.id&&t.type==="redeem");
+                  const giftTxs   = data.transactions.filter(t=>t.childId===child.id&&t.type==="gift");
+                  const allEmpty  = myHistory.length===0 && redeemTxs.length===0 && giftTxs.length===0;
+                  if(allEmpty) return <div className="empty"><div className="empty-icon">📋</div><div className="empty-text">No history yet</div><div className="empty-sub">Complete some chores to get started!</div></div>;
+                  return null;
+                })()}
                 {/* Gifts */}
-                {data.transactions.filter(t=>t.childId===child.id&&t.type==="gift").map(t => (
+                {data.transactions.filter(t=>t.childId===child.id&&t.type==="gift").map(t=>(
                   <div key={t.id} className="request-card approved">
-                    <div style={{ fontSize:"1.8rem" }}>🎁</div>
-                    <div className="request-info"><div className="request-chore">{t.label}</div><div className="request-time">{t.time}</div></div>
-                    <div style={{ fontWeight:800, color:"var(--green)" }}>+{pts(t.points)}</div>
+                    <div style={{fontSize:"1.8rem"}}>🎁</div>
+                    <div className="request-info"><div style={{fontWeight:800}}>{t.label}</div><div style={{fontSize:".72rem",color:"var(--mid)"}}>{t.time}</div></div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontWeight:800,color:"var(--green)"}}>+{pts(t.points)}</div>
+                      <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(t.points,rate)}</div>
+                    </div>
                   </div>
                 ))}
-                {myHistory.map(req => {
-                  const chore = data.chores.find(c => c.id===req.choreId);
-                  return (
+                {/* Redemptions */}
+                {data.transactions.filter(t=>t.childId===child.id&&t.type==="redeem").map(t=>(
+                  <div key={t.id} className="request-card" style={{borderLeftColor:"var(--purple)"}}>
+                    <div style={{fontSize:"1.8rem"}}>{t.bankIcon||"🎉"}</div>
+                    <div className="request-info">
+                      <div style={{fontWeight:800}}>{t.label}</div>
+                      <div style={{fontSize:".72rem",color:"var(--mid)"}}>{t.time}</div>
+                      <span className="tag" style={{background:"var(--lavender)",color:"var(--purple)",marginTop:3,display:"inline-block"}}>Redeemed</span>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontWeight:800,color:"var(--purple)"}}>{pts(Math.abs(t.points))}</div>
+                      <div style={{fontSize:".75rem",color:"var(--purple)",fontWeight:700}}>{money(Math.abs(t.points),rate)}</div>
+                    </div>
+                  </div>
+                ))}
+                {/* Chore requests */}
+                {myHistory.map(req=>{
+                  const chore=data.chores.find(c=>c.id===req.choreId);
+                  return(
                     <div key={req.id} className={`request-card ${req.status}`}>
-                      <div style={{ fontSize:"1.8rem" }}>{chore?.icon||"📋"}</div>
-                      <div className="request-info">
-                        <div className="request-chore">{chore?.title||"Chore"}</div>
-                        <div className="request-time">{req.time}</div>
-                      </div>
-                      <div style={{ textAlign:"right" }}>
-                        <div style={{ fontWeight:800, color:"#f59e0b", marginBottom:6 }}>+{pts(chore?.points||0)}</div>
+                      <div style={{fontSize:"1.8rem"}}>{chore?.icon||"📋"}</div>
+                      <div className="request-info"><div style={{fontWeight:800}}>{chore?.title||"Chore"}</div><div style={{fontSize:".72rem",color:"var(--mid)"}}>{req.time}</div></div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontWeight:800,color:"var(--amber)"}}>+{pts(chore?.points||0)}</div>
+                        <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(chore?.points||0,rate)}</div>
                         <span className={`status status-${req.status}`}>{req.status}</span>
                       </div>
                     </div>
@@ -779,88 +1116,167 @@ export default function App() {
           </div>
         </div>
 
-        {/* Claim modal */}
-        {modal==="claimChore" && claimChore && (
-          <div className="modal-overlay">
-            <div className="modal">
-              <div style={{ fontSize:"3rem", textAlign:"center", marginBottom:12 }}>{claimChore.icon}</div>
-              <div className="modal-title" style={{ textAlign:"center" }}>{claimChore.title}</div>
-              <div style={{ textAlign:"center", color:"var(--amber)", fontWeight:800, fontSize:"1.1rem", marginBottom:20 }}>⭐ {pts(claimChore.points)} · {money(claimChore.points)}</div>
-              {claimChore.requiresPhoto && (
-                <div className="form-group">
-                  <label className="form-label">📸 Photo Evidence Required</label>
-                  <label className="photo-upload">
-                    {claimPhoto ? <img src={claimPhoto} alt="" className="photo-preview" /> : <div><div style={{ fontSize:"2rem" }}>📷</div><div style={{ fontWeight:700, marginTop:8 }}>Tap to upload photo</div></div>}
-                    <input type="file" accept="image/*" style={{ display:"none" }} onChange={photoInput} />
-                  </label>
+        {modal==="claimChore"&&claimChore&&(
+          <div className="modal-overlay"><div className="modal">
+            <div style={{fontSize:"2.8rem",textAlign:"center",marginBottom:10}}>{claimChore.icon}</div>
+            <div className="modal-title" style={{textAlign:"center"}}>{claimChore.title}</div>
+            <div style={{textAlign:"center",marginBottom:18}}>
+              <span className="val-badge">⭐ {pts(claimChore.points)} · {money(claimChore.points,rate)}</span>
+            </div>
+            {claimChore.requiresPhoto&&(
+              <div className="form-group">
+                <label className="form-label">📸 Photo Required</label>
+                <label className="photo-upload">
+                  {claimPhoto?<img src={claimPhoto} alt="" className="photo-preview"/>:<div><div style={{fontSize:"2rem"}}>📷</div><div style={{fontWeight:700,marginTop:8}}>Tap to upload photo</div></div>}
+                  <input type="file" accept="image/*" style={{display:"none"}} onChange={photoInput}/>
+                </label>
+              </div>
+            )}
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn btn-blue" style={{flex:1}} onClick={handleSubmitClaim} disabled={claimChore.requiresPhoto&&!claimPhoto}>✅ Submit for Approval</button>
+              <button className="btn btn-ghost" onClick={()=>setModal(null)}>Cancel</button>
+            </div>
+          </div></div>
+        )}
+
+        {/* Redemption nudge modal */}
+        {redeemNudge&&(()=>{
+          const bank=data.banks.find(b=>b.id===redeemNudge);
+          if(!bank)return null;
+          const redeemTxs=data.transactions.filter(t=>t.childId===child.id&&t.type==="redeem"&&t.bankId===bank.id);
+          const totalSpentPts=redeemTxs.reduce((a,t)=>a+Math.abs(t.points),0);
+          // after this redeem it would be totalSpentPts + bank.costPoints
+          const afterRedeemTotal=totalSpentPts+bank.costPoints;
+          const goalBanks=myBanks.filter(b=>b.type==="goal"&&b.id!==bank.id);
+          const inspBank=goalBanks[0]||null;
+          const inspPct=inspBank?Math.min(100,Math.round((afterRedeemTotal/inspBank.costPoints)*100)):0;
+          return(
+            <div className="modal-overlay"><div className="modal">
+              <div style={{textAlign:"center",fontSize:"3rem",marginBottom:8}}>{bank.icon}</div>
+              <div className="modal-title" style={{textAlign:"center"}}>Redeem {bank.name}?</div>
+
+              {/* What they're spending now */}
+              <div style={{background:"var(--lavender)",borderRadius:12,padding:14,marginBottom:12}}>
+                <div style={{fontWeight:800,color:"var(--purple)",fontSize:".9rem",marginBottom:4}}>You're about to spend:</div>
+                <div style={{fontWeight:900,fontSize:"1.2rem",color:"var(--purple)"}}>{pts(bank.costPoints)} · {money(bank.costPoints,rate)}</div>
+                <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600,marginTop:4}}>for: {bank.reward}</div>
+              </div>
+
+              {/* Running tally */}
+              {bank.type==="recurring"&&(
+                <div style={{background:"#fef3c7",borderRadius:12,padding:14,marginBottom:12}}>
+                  <div style={{fontWeight:800,color:"#92400e",fontSize:".85rem",marginBottom:4}}>
+                    💸 Your {bank.name} tab so far
+                  </div>
+                  <div style={{fontWeight:900,fontSize:"1.1rem",color:"#b45309"}}>
+                    {totalSpentPts>0?`${totalSpentPts} pts · ${money(totalSpentPts,rate)} spent (${redeemTxs.length}x)`:"This will be your first time!"}
+                  </div>
+                  {totalSpentPts>0&&(
+                    <div style={{fontWeight:800,fontSize:".82rem",color:"#92400e",marginTop:4}}>
+                      After this redeem: {afterRedeemTotal} pts · {money(afterRedeemTotal,rate)} total
+                    </div>
+                  )}
                 </div>
               )}
-              <div style={{ display:"flex", gap:10 }}>
-                <button className="btn btn-blue" style={{ flex:1 }} onClick={handleSubmitClaim} disabled={claimChore.requiresPhoto && !claimPhoto}>✅ Submit for Approval</button>
-                <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
+
+              {/* Inspiration comparison */}
+              {inspBank&&(
+                <div style={{background:"var(--mint)",borderRadius:12,padding:14,marginBottom:16,border:"2px solid var(--green)"}}>
+                  <div style={{fontWeight:800,color:"var(--green)",fontSize:".85rem",marginBottom:6}}>💡 Did you know?</div>
+                  <div style={{fontWeight:700,fontSize:".82rem",color:"#065f46",lineHeight:1.5}}>
+                    If you saved this {money(bank.costPoints,rate)} instead, you'd be{" "}
+                    <strong style={{fontSize:"1rem",color:"var(--green)"}}>{inspPct}%</strong>{" "}
+                    of the way to your <strong>{inspBank.name}</strong> goal {inspBank.icon}
+                  </div>
+                  <div style={{marginTop:8}}>
+                    <div style={{height:8,background:"#e2e8f0",borderRadius:99,overflow:"hidden"}}>
+                      <div style={{height:"100%",borderRadius:99,background:"var(--green)",width:`${inspPct}%`,transition:"width .4s"}}/>
+                    </div>
+                    <div style={{fontSize:".75rem",color:"var(--mid)",fontWeight:600,marginTop:4}}>
+                      {inspBank.costPoints-Math.min(inspBank.costPoints,afterRedeemTotal)} pts ({money(Math.max(0,inspBank.costPoints-afterRedeemTotal),rate)}) still needed
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div style={{display:"flex",gap:8}}>
+                <button className="btn btn-green" style={{flex:1}} onClick={()=>handleRedeemBank(bank.id)}>🎉 Yes, Redeem!</button>
+                <button className="btn btn-ghost" onClick={()=>setRedeemNudge(null)}>Save Instead</button>
               </div>
-            </div>
-          </div>
-        )}
+            </div></div>
+          );
+        })()}
       </>
     );
   }
 
   // ══ PARENT ════════════════════════════════════════════════════════════════════
-  if (screen === "parent") {
-    const allPending = data.choreRequests.filter(r => r.status==="pending");
-    return (
+  if(screen==="parent"){
+    const allPending=data.choreRequests.filter(r=>r.status==="pending");
+    return(
       <>
         <style>{styles}</style>
         <div className="app">
           <nav className="nav">
-            <div className="nav-logo"><Av photo={activeUser.photo} emoji={activeUser.avatar||"👤"} size={32} />{activeUser.name}</div>
+            <div className="nav-logo"><Av photo={activeUser.photo} emoji={activeUser.avatar||"👤"} size={30}/>{activeUser.name}</div>
             <div className="nav-right">
-              {allPending.length>0 && <span className="notif-dot">{allPending.length}</span>}
-              <button className="nav-btn ghost" onClick={() => setScreen("home")}>← Switch</button>
+              {allPending.length>0&&<span className="notif-dot">{allPending.length}</span>}
+              <button className="nav-btn ghost" onClick={()=>setScreen("home")}>← Switch</button>
             </div>
           </nav>
           <div className="main">
             <div className="tabs">
               {[
                 ["approvals",`✅ Approvals${allPending.length>0?` (${allPending.length})`:""}`],
-                ["chores","🧹 Chores"],["banks","🏦 Banks"],["children","👦 Children"],["settings","⚙️ Settings"],
-              ].map(([t,l]) => <button key={t} className={`tab ${parentTab===t?"active":""}`} onClick={() => setParentTab(t)} style={{ fontSize:".78rem" }}>{l}</button>)}
+                ["calendar","📅 Calendar"],
+                ["chores","🧹 Chores"],
+                ["banks","🏦 Banks"],
+                ["children","👦 Children"],
+                ["settings","⚙️ Settings"],
+              ].map(([t,l])=><button key={t} className={`tab ${parentTab===t?"active":""}`} onClick={()=>setParentTab(t)} style={{fontSize:".74rem"}}>{l}</button>)}
             </div>
 
             {/* APPROVALS */}
-            {parentTab==="approvals" && (
+            {parentTab==="approvals"&&(
               <>
                 <div className="section-title">✅ Pending Approvals</div>
-                {allPending.length===0 && <div className="empty"><div className="empty-icon">🎉</div><div className="empty-text">All caught up!</div></div>}
-                {allPending.map(req => { const child=data.children.find(c=>c.id===req.childId); const chore=data.chores.find(c=>c.id===req.choreId); return <ApprovalCard key={req.id} req={req} child={child} chore={chore} onApprove={() => handleApprove(req.id)} onReject={() => handleReject(req.id)} />; })}
-                {data.choreRequests.filter(r=>r.status!=="pending").length>0 && (<>
-                  <div className="divider" /><div className="section-title">📋 Recent History</div>
-                  {data.choreRequests.filter(r=>r.status!=="pending").slice(0,10).map(req => { const child=data.children.find(c=>c.id===req.childId); const chore=data.chores.find(c=>c.id===req.choreId); return <ApprovalCard key={req.id} req={req} child={child} chore={chore} onApprove={() => {}} onReject={() => {}} />; })}
+                {allPending.length===0&&<div className="empty"><div className="empty-icon">🎉</div><div className="empty-text">All caught up!</div></div>}
+                {allPending.map(req=>{const child=data.children.find(c=>c.id===req.childId);const chore=data.chores.find(c=>c.id===req.choreId);return<ApprovalCard key={req.id} req={req} child={child} chore={chore} rate={rate} onApprove={()=>handleApprove(req.id)} onReject={()=>handleReject(req.id)}/>;  })}
+                {data.choreRequests.filter(r=>r.status!=="pending").length>0&&(<>
+                  <div className="divider"/><div className="section-title">📋 Recent History</div>
+                  {data.choreRequests.filter(r=>r.status!=="pending").slice(0,10).map(req=>{const child=data.children.find(c=>c.id===req.childId);const chore=data.chores.find(c=>c.id===req.choreId);return<ApprovalCard key={req.id} req={req} child={child} chore={chore} rate={rate} onApprove={()=>{}} onReject={()=>{}}/>;  })}
                 </>)}
               </>
             )}
 
-            {/* CHORES */}
-            {parentTab==="chores" && (
+            {/* CALENDAR */}
+            {parentTab==="calendar"&&(
               <>
-                <div className="flex-between" style={{ marginBottom:16 }}>
-                  <div className="section-title" style={{ marginBottom:0 }}>🧹 Manage Chores</div>
-                  <button className="btn btn-blue btn-sm" onClick={() => setModal("addChore")}>+ Add Chore</button>
+                <div className="section-title">📅 Fortnight Calendar</div>
+                <CalendarView data={data} doUpdate={doUpdate} isParent={true}/>
+              </>
+            )}
+
+            {/* CHORES */}
+            {parentTab==="chores"&&(
+              <>
+                <div className="flex-between" style={{marginBottom:14}}>
+                  <div className="section-title" style={{marginBottom:0}}>🧹 Manage Chores</div>
+                  <button className="btn btn-blue btn-sm" onClick={()=>setModal("addChore")}>+ Add Chore</button>
                 </div>
-                {data.chores.length===0 && <div className="empty"><div className="empty-icon">🧹</div><div className="empty-text">No chores yet</div></div>}
+                {data.chores.length===0&&<div className="empty"><div className="empty-icon">🧹</div><div className="empty-text">No chores yet</div></div>}
                 <div className="card-grid">
-                  {data.chores.map(chore => (
+                  {data.chores.map(chore=>(
                     <div key={chore.id} className="chore-card">
-                      <div className="chore-icon">{chore.icon}</div>
-                      <div className="chore-title">{chore.title}</div>
-                      <div className="chore-pts">⭐ {pts(chore.points)}</div>
-                      <div className="chore-tags">
-                        {chore.requiresPhoto && <span className="tag tag-photo">📸 Photo</span>}
+                      <div style={{fontSize:"2rem"}}>{chore.icon}</div>
+                      <div style={{fontWeight:800}}>{chore.title}</div>
+                      <div style={{color:"var(--amber)",fontWeight:800,fontSize:".85rem"}}>⭐ {pts(chore.points)}</div>
+                      <div style={{color:"var(--green)",fontWeight:700,fontSize:".82rem"}}>{money(chore.points,rate)} value</div>
+                      <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                        {chore.requiresPhoto&&<span className="tag tag-photo">📸 Photo</span>}
                         <span className={`tag ${chore.recurring?"tag-recurring":"tag-oneoff"}`}>{chore.recurring?"🔄":"🎯"}</span>
                       </div>
-                      <div style={{ fontSize:".8rem", color:"var(--mid)", fontWeight:600 }}>{chore.assignedTo==="all"?"All children":data.children.find(c=>c.id===chore.assignedTo)?.name}</div>
-                      <button className="btn btn-red btn-sm" onClick={() => doUpdate(d=>({...d,chores:d.chores.filter(c=>c.id!==chore.id)}))}>🗑 Remove</button>
+                      <button className="btn btn-red btn-sm" onClick={()=>doUpdate(d=>({...d,chores:d.chores.filter(c=>c.id!==chore.id)}))}>🗑 Remove</button>
                     </div>
                   ))}
                 </div>
@@ -868,74 +1284,73 @@ export default function App() {
             )}
 
             {/* BANKS */}
-            {parentTab==="banks" && (
+            {parentTab==="banks"&&(
               <>
                 <div className="child-selector">
-                  {data.children.map(child => (
-                    <div key={child.id} className={`child-pill ${selChild===child.id?"active":""}`} onClick={() => setSelChild(child.id)}>
-                      <Av photo={child.photo} emoji={child.avatar} size={24} />{child.name}
+                  {data.children.map(child=>(
+                    <div key={child.id} className={`child-pill ${selChild===child.id?"active":""}`} onClick={()=>setSelChild(child.id)}>
+                      <Av photo={child.photo} emoji={child.avatar} size={22}/>{child.name}
                     </div>
                   ))}
                 </div>
-                {selChild && (
-                  <>
-                    <div className="flex-between" style={{ marginBottom:16 }}>
-                      <div className="section-title" style={{ marginBottom:0 }}>🏦 {data.children.find(c=>c.id===selChild)?.name}'s Banks</div>
-                      <button className="btn btn-purple btn-sm" onClick={() => setModal("addBank")}>+ Add Bank</button>
-                    </div>
-                    {childBanks.length===0 && <div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No banks yet</div></div>}
-                    <div className="card-grid">
-                      {childBanks.map(bank => {
-                        const pct = Math.min(100,(bank.savedPoints/bank.costPoints)*100);
-                        return (
-                          <div key={bank.id} className="bank-card">
-                            <div style={{ display:"flex", justifyContent:"space-between" }}>
-                              <div style={{ fontSize:"2rem" }}>{bank.icon}</div>
-                              <span className={`tag ${bank.type==="recurring"?"tag-recurring":"tag-oneoff"}`}>{bank.type==="recurring"?"🔄":"🎯"}</span>
-                            </div>
-                            <div className="bank-name">{bank.name}</div>
-                            <div className="bank-reward">🎁 {bank.reward}</div>
-                            <div className="bank-progress"><div className="bank-progress-fill" style={{ width:`${pct}%` }} /></div>
-                            <div className="flex-between">
-                              <div className="bank-saved">{bank.savedPoints}/{bank.costPoints} pts</div>
-                              <div style={{ fontSize:".8rem", color:"var(--mid)", fontWeight:600 }}>{money(bank.costPoints)}</div>
-                            </div>
-                            <button className="btn btn-red btn-sm" onClick={() => doUpdate(d=>({...d,banks:d.banks.filter(b=>b.id!==bank.id)}))}>🗑 Remove</button>
+                {selChild&&(<>
+                  <div className="flex-between" style={{marginBottom:14}}>
+                    <div className="section-title" style={{marginBottom:0}}>🏦 {data.children.find(c=>c.id===selChild)?.name}'s Banks</div>
+                    <button className="btn btn-purple btn-sm" onClick={()=>setModal("addBank")}>+ Add Bank</button>
+                  </div>
+                  {childBanks.length===0&&<div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No banks yet</div></div>}
+                  <div className="card-grid">
+                    {childBanks.map(bank=>{
+                      const pct=Math.min(100,(bank.savedPoints/bank.costPoints)*100);
+                      return(
+                        <div key={bank.id} className="bank-card">
+                          <div style={{display:"flex",justifyContent:"space-between"}}>
+                            <div style={{fontSize:"1.8rem"}}>{bank.icon}</div>
+                            <span className={`tag ${bank.type==="recurring"?"tag-recurring":"tag-oneoff"}`}>{bank.type==="recurring"?"🔄":"🎯"}</span>
                           </div>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
+                          <div style={{fontWeight:800}}>{bank.name}</div>
+                          <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>🎁 {bank.reward}</div>
+                          <div className="bank-progress"><div className="bank-progress-fill" style={{width:`${pct}%`}}/></div>
+                          <div className="flex-between">
+                            <div style={{fontWeight:800,color:"var(--green)",fontSize:".88rem"}}>{bank.savedPoints}/{bank.costPoints} pts</div>
+                            <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>{money(bank.costPoints,rate)}</div>
+                          </div>
+                          <button className="btn btn-red btn-sm" onClick={()=>doUpdate(d=>({...d,banks:d.banks.filter(b=>b.id!==bank.id)}))}>🗑 Remove</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>)}
               </>
             )}
 
             {/* CHILDREN */}
-            {parentTab==="children" && (
+            {parentTab==="children"&&(
               <>
-                <div className="flex-between" style={{ marginBottom:16 }}>
-                  <div className="section-title" style={{ marginBottom:0 }}>👦 Children</div>
-                  <button className="btn btn-green btn-sm" onClick={() => setModal("addChild")}>+ Add Child</button>
+                <div className="flex-between" style={{marginBottom:14}}>
+                  <div className="section-title" style={{marginBottom:0}}>👦 Children</div>
+                  <button className="btn btn-green btn-sm" onClick={()=>setModal("addChild")}>+ Add Child</button>
                 </div>
-                {data.children.map(child => {
-                  const earned = data.transactions.filter(t=>t.childId===child.id&&t.type==="earn").reduce((a,t)=>a+t.points,0);
-                  return (
+                {data.children.map(child=>{
+                  const earned=data.transactions.filter(t=>t.childId===child.id&&t.type==="earn").reduce((a,t)=>a+t.points,0);
+                  return(
                     <div key={child.id} className="card">
                       <div className="flex-between">
-                        <div style={{ display:"flex", gap:14, alignItems:"center" }}>
-                          <Av photo={child.photo} emoji={child.avatar} size={52} />
+                        <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                          <Av photo={child.photo} emoji={child.avatar} size={50}/>
                           <div>
-                            <div style={{ fontWeight:800, fontSize:"1.1rem" }}>{child.name}</div>
-                            <div style={{ color:"var(--mid)", fontSize:".85rem", fontWeight:600 }}>Wallet: {child.walletPoints} pts · Earned: {earned} pts</div>
-                            <div style={{ fontSize:".8rem", marginTop:2 }}>{child.pin ? <span style={{ color:"var(--green)", fontWeight:700 }}>🔒 PIN active</span> : <span style={{ color:"var(--mid)", fontWeight:600 }}>No PIN</span>}</div>
+                            <div style={{fontWeight:800,fontSize:"1.05rem"}}>{child.name}</div>
+                            <div style={{color:"var(--mid)",fontSize:".82rem",fontWeight:600}}>Wallet: {child.walletPoints} pts · {money(child.walletPoints,rate)}</div>
+                            <div style={{color:"var(--mid)",fontSize:".78rem",fontWeight:600}}>Earned total: {earned} pts · {money(earned,rate)}</div>
+                            <div style={{fontSize:".78rem",marginTop:2}}>{child.pin?<span style={{color:"var(--green)",fontWeight:700}}>🔒 PIN active</span>:<span style={{color:"var(--mid)",fontWeight:600}}>No PIN</span>}</div>
                           </div>
                         </div>
-                        <div style={{ display:"flex", flexDirection:"column", gap:6, alignItems:"flex-end" }}>
-                          <button className="btn btn-amber btn-sm" onClick={() => { setGiftChild(child.id); setGiftPts(""); setGiftNote(""); }}>🎁 Gift Points</button>
-                          <button className="btn btn-red btn-sm" onClick={() => doUpdate(d=>({...d,children:d.children.filter(c=>c.id!==child.id)}))}>Remove</button>
+                        <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end"}}>
+                          <button className="btn btn-amber btn-sm" onClick={()=>{setGiftChild(child.id);setGiftPts("");setGiftNote("");}}>🎁 Gift</button>
+                          <button className="btn btn-red btn-sm" onClick={()=>doUpdate(d=>({...d,children:d.children.filter(c=>c.id!==child.id)}))}>Remove</button>
                         </div>
                       </div>
-                      <EditChildInline child={child} onSave={upd => doUpdate(d=>({...d,children:d.children.map(c=>c.id===child.id?{...c,...upd}:c)}))} />
+                      <EditChildInline child={child} onSave={upd=>doUpdate(d=>({...d,children:d.children.map(c=>c.id===child.id?{...c,...upd}:c)}))}/>
                     </div>
                   );
                 })}
@@ -943,29 +1358,45 @@ export default function App() {
             )}
 
             {/* SETTINGS */}
-            {parentTab==="settings" && (
+            {parentTab==="settings"&&(
               <>
-                <div className="section-title">⚙️ Parent Accounts</div>
-                <div className="flex-between" style={{ marginBottom:16 }}>
-                  <span style={{ fontWeight:700, color:"var(--mid)" }}>Manage parents</span>
-                  <button className="btn btn-blue btn-sm" onClick={() => setModal("addParent")}>+ Add Parent</button>
+                {/* Point value editor */}
+                <div className="section-title">💰 Point Value</div>
+                <div className="card" style={{marginBottom:20}}>
+                  <div style={{fontWeight:800,marginBottom:6}}>How much is 1 point worth?</div>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    <span style={{fontWeight:700,fontSize:"1.1rem"}}>$</span>
+                    <input className="form-input" type="number" min="0.01" step="0.05" style={{width:120}}
+                      value={rate}
+                      onChange={e=>doUpdate(d=>({...d,settings:{...d.settings,pointValue:+e.target.value}}))}/>
+                    <span style={{fontWeight:600,color:"var(--mid)"}}>per point</span>
+                  </div>
+                  <div style={{marginTop:10,fontSize:".85rem",color:"var(--mid)",fontWeight:600}}>
+                    Currently: 1 point = <strong>${rate.toFixed(2)}</strong> · 10 points = <strong>${(rate*10).toFixed(2)}</strong>
+                  </div>
+                  <div style={{marginTop:6,fontSize:".8rem",color:"var(--mid)"}}>
+                    Tip: This is a great way to teach kids the real value of money. Start at 50¢ and adjust as they grow.
+                  </div>
                 </div>
-                {data.parents.map(parent => (
-                  <div key={parent.id} className="card" style={{ marginBottom:12 }}>
+
+                <div className="section-title">⚙️ Parent Accounts</div>
+                <div className="flex-between" style={{marginBottom:14}}>
+                  <span style={{fontWeight:700,color:"var(--mid)"}}>Manage parents</span>
+                  <button className="btn btn-blue btn-sm" onClick={()=>setModal("addParent")}>+ Add Parent</button>
+                </div>
+                {data.parents.map(parent=>(
+                  <div key={parent.id} className="card" style={{marginBottom:12}}>
                     <div className="flex-between">
-                      <div style={{ display:"flex", gap:12, alignItems:"center" }}>
-                        <Av photo={parent.photo} emoji={parent.avatar||"👤"} size={52} />
-                        <div>
-                          <div style={{ fontWeight:800, fontSize:"1.1rem" }}>{parent.name}</div>
-                          <div style={{ color:"var(--mid)", fontSize:".85rem", fontWeight:600 }}>PIN: ••••</div>
-                        </div>
+                      <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                        <Av photo={parent.photo} emoji={parent.avatar||"👤"} size={50}/>
+                        <div><div style={{fontWeight:800,fontSize:"1.05rem"}}>{parent.name}</div><div style={{color:"var(--mid)",fontSize:".82rem",fontWeight:600}}>PIN: ••••</div></div>
                       </div>
-                      {data.parents.length>1 && <button className="btn btn-red btn-sm" onClick={() => doUpdate(d=>({...d,parents:d.parents.filter(p=>p.id!==parent.id)}))}>Remove</button>}
+                      {data.parents.length>1&&<button className="btn btn-red btn-sm" onClick={()=>doUpdate(d=>({...d,parents:d.parents.filter(p=>p.id!==parent.id)}))}>Remove</button>}
                     </div>
-                    <EditParentInline parent={parent} onSave={upd => doUpdate(d=>({...d,parents:d.parents.map(p=>p.id===parent.id?{...p,name:upd.name,photo:upd.photo,avatar:upd.avatar,...(upd.pin?{pin:upd.pin}:{})}:p)}))} />
+                    <EditParentInline parent={parent} onSave={upd=>doUpdate(d=>({...d,parents:d.parents.map(p=>p.id===parent.id?{...p,name:upd.name,photo:upd.photo,avatar:upd.avatar,...(upd.pin?{pin:upd.pin}:{})}:p)}))}/>
                   </div>
                 ))}
-                <div className="divider" />
+                <div className="divider"/>
                 <div className="section-title">📊 Family Stats</div>
                 <div className="stats-row">
                   <div className="stat-box"><div className="stat-val">{data.children.length}</div><div className="stat-label">Children</div></div>
@@ -978,42 +1409,39 @@ export default function App() {
         </div>
 
         {/* Modals */}
-        {modal==="addChore" && <AddChoreModal children={data.children} onSave={f=>{doUpdate(d=>({...d,chores:[...d.chores,{...f,id:uid()}]}));setModal(null);}} onClose={() => setModal(null)} />}
-        {modal==="addBank" && selChild && <AddBankModal childId={selChild} onSave={b=>{doUpdate(d=>({...d,banks:[...d.banks,{...b,id:uid()}]}));setModal(null);}} onClose={() => setModal(null)} />}
-        {modal==="addChild" && <AddChildModal onSave={c=>{doUpdate(d=>({...d,children:[...d.children,{...c,id:uid()}]}));setModal(null);}} onClose={() => setModal(null)} />}
-        {modal==="addParent" && <AddParentModal onSave={p=>{doUpdate(d=>({...d,parents:[...d.parents,{...p,id:uid()}]}));setModal(null);}} onClose={() => setModal(null)} />}
+        {modal==="addChore"&&<AddChoreModal children={data.children} onSave={f=>{doUpdate(d=>({...d,chores:[...d.chores,{...f,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
+        {modal==="addBank"&&selChild&&<AddBankModal childId={selChild} onSave={b=>{doUpdate(d=>({...d,banks:[...d.banks,{...b,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
+        {modal==="addChild"&&<AddChildModal onSave={c=>{doUpdate(d=>({...d,children:[...d.children,{...c,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
+        {modal==="addParent"&&<AddParentModal onSave={p=>{doUpdate(d=>({...d,parents:[...d.parents,{...p,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
 
         {/* Gift Modal */}
-        {giftChild && (() => {
-          const child = data.children.find(c => c.id===giftChild);
-          return (
-            <div className="modal-overlay">
-              <div className="modal">
-                <div style={{ textAlign:"center", marginBottom:14 }}><Av photo={child?.photo} emoji={child?.avatar} size={68} /></div>
-                <div className="modal-title" style={{ textAlign:"center" }}>🎁 Gift Points to {child?.name}</div>
-                <div style={{ background:"var(--yellow)", borderRadius:12, padding:14, marginBottom:20, fontSize:".9rem", fontWeight:700, color:"#92400e" }}>
-                  1 point = 50¢ · Current wallet: {child?.walletPoints} pts ({money(child?.walletPoints||0)})
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Points to Gift</label>
-                  <input className="form-input" type="number" min="1" placeholder="e.g. 10" value={giftPts} onChange={e=>setGiftPts(e.target.value)} />
-                  {giftPts>0 && <div style={{ fontSize:".85rem", color:"var(--mid)", fontWeight:700, marginTop:6 }}>= {money(+giftPts)} value added to wallet</div>}
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Note (optional)</label>
-                  <input className="form-input" placeholder="e.g. Birthday bonus 🎂, Great behaviour today!" value={giftNote} onChange={e=>setGiftNote(e.target.value)} />
-                </div>
-                <div style={{ display:"flex", gap:10 }}>
-                  <button className="btn btn-amber" style={{ flex:1 }} onClick={handleGift} disabled={!giftPts||+giftPts<=0}>🎁 Give Points!</button>
-                  <button className="btn btn-ghost" onClick={() => setGiftChild(null)}>Cancel</button>
-                </div>
+        {giftChild&&(()=>{
+          const child=data.children.find(c=>c.id===giftChild);
+          return(
+            <div className="modal-overlay"><div className="modal">
+              <div style={{textAlign:"center",marginBottom:12}}><Av photo={child?.photo} emoji={child?.avatar} size={64}/></div>
+              <div className="modal-title" style={{textAlign:"center"}}>🎁 Gift Points to {child?.name}</div>
+              <div style={{background:"var(--yellow)",borderRadius:12,padding:12,marginBottom:18,fontSize:".88rem",fontWeight:700,color:"#92400e"}}>
+                1 point = {money(1,rate)} · Wallet: {child?.walletPoints} pts ({money(child?.walletPoints||0,rate)})
               </div>
-            </div>
+              <div className="form-group">
+                <label className="form-label">Points to Gift</label>
+                <input className="form-input" type="number" min="1" placeholder="e.g. 10" value={giftPts} onChange={e=>setGiftPts(e.target.value)}/>
+                {giftPts>0&&<div style={{fontSize:".82rem",color:"var(--green)",fontWeight:700,marginTop:5}}>= {money(+giftPts,rate)} added to wallet</div>}
+              </div>
+              <div className="form-group">
+                <label className="form-label">Note (optional)</label>
+                <input className="form-input" placeholder="e.g. Birthday bonus 🎂" value={giftNote} onChange={e=>setGiftNote(e.target.value)}/>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button className="btn btn-amber" style={{flex:1}} onClick={handleGift} disabled={!giftPts||+giftPts<=0}>🎁 Give Points!</button>
+                <button className="btn btn-ghost" onClick={()=>setGiftChild(null)}>Cancel</button>
+              </div>
+            </div></div>
           );
         })()}
       </>
     );
   }
-
   return null;
 }
