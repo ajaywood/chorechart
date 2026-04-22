@@ -34,7 +34,8 @@ const defaultData = {
   choreRequests: [],
   transactions: [],
   settings: {
-    pointValue: 0.50,       // $ per point
+    pointValue: 0.50,       // value per point
+    currency: "AUD",        // ISO 4217 currency code
     calendarStartDay: "Mon", // "Mon" or "Sun"
     fortnightStart: null,    // ISO date string of the Monday/Sunday that week 1 started
   },
@@ -49,19 +50,73 @@ function saveData(d) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const uid   = () => Math.random().toString(36).slice(2,10);
 const now   = () => new Date().toLocaleString("en-AU",{dateStyle:"short",timeStyle:"short"});
-const money = (pts, rate) => `$${(pts * rate).toFixed(2)}`;
-const pts   = n => `${n} pt${n!==1?"s":""}`;
+
+// Currency formatting using Intl
+const CURRENCIES = [
+  { code:"AUD", name:"Australian Dollar",   symbol:"A$", flag:"🇦🇺" },
+  { code:"USD", name:"US Dollar",           symbol:"$",  flag:"🇺🇸" },
+  { code:"NZD", name:"New Zealand Dollar",  symbol:"NZ$",flag:"🇳🇿" },
+  { code:"GBP", name:"British Pound",       symbol:"£",  flag:"🇬🇧" },
+  { code:"EUR", name:"Euro",                symbol:"€",  flag:"🇪🇺" },
+  { code:"CAD", name:"Canadian Dollar",     symbol:"C$", flag:"🇨🇦" },
+  { code:"SGD", name:"Singapore Dollar",    symbol:"S$", flag:"🇸🇬" },
+  { code:"ZAR", name:"South African Rand",  symbol:"R",  flag:"🇿🇦" },
+  { code:"INR", name:"Indian Rupee",        symbol:"₹",  flag:"🇮🇳" },
+  { code:"JPY", name:"Japanese Yen",        symbol:"¥",  flag:"🇯🇵" },
+  { code:"CNY", name:"Chinese Yuan",        symbol:"¥",  flag:"🇨🇳" },
+  { code:"HKD", name:"Hong Kong Dollar",    symbol:"HK$",flag:"🇭🇰" },
+  { code:"AED", name:"UAE Dirham",          symbol:"د.إ",flag:"🇦🇪" },
+  { code:"CHF", name:"Swiss Franc",         symbol:"Fr", flag:"🇨🇭" },
+  { code:"SEK", name:"Swedish Krona",       symbol:"kr", flag:"🇸🇪" },
+  { code:"NOK", name:"Norwegian Krone",     symbol:"kr", flag:"🇳🇴" },
+  { code:"DKK", name:"Danish Krone",        symbol:"kr", flag:"🇩🇰" },
+  { code:"MXN", name:"Mexican Peso",        symbol:"$",  flag:"🇲🇽" },
+  { code:"BRL", name:"Brazilian Real",      symbol:"R$", flag:"🇧🇷" },
+  { code:"PHP", name:"Philippine Peso",     symbol:"₱",  flag:"🇵🇭" },
+];
+
+function money(pts, rate, currencyCode="AUD") {
+  const val = pts * rate;
+  try {
+    return new Intl.NumberFormat(undefined, { style:"currency", currency: currencyCode, minimumFractionDigits:2, maximumFractionDigits:2 }).format(val);
+  } catch {
+    const cur = CURRENCIES.find(c=>c.code===currencyCode);
+    return `${cur?.symbol||"$"}${val.toFixed(2)}`;
+  }
+}
+
+const pts = n => `${n} pt${n!==1?"s":""}`;
 const readFile = f => new Promise(res => { const r=new FileReader(); r.onload=e=>res(e.target.result); r.readAsDataURL(f); });
+
+// Parse an ISO date string (YYYY-MM-DD) as local midnight, avoiding timezone shifts
+function parseLocalDate(str) {
+  if (!str) return null;
+  const [y,m,d] = str.split("-").map(Number);
+  return new Date(y, m-1, d);
+}
+
+// Snap a date backwards to the nearest Mon or Sun
+function snapToStartDay(date, startDay) {
+  const d = new Date(date);
+  const dow = d.getDay(); // 0=Sun,1=Mon,...6=Sat
+  const target = startDay === "Sun" ? 0 : 1;
+  let diff = dow - target;
+  if (diff < 0) diff += 7;
+  d.setDate(d.getDate() - diff);
+  return d;
+}
 
 // Get which fortnight slot (week 0 or 1, day 0-6) today falls on
 function getTodaySlot(settings) {
-  const startDay = settings.calendarStartDay === "Sun" ? 0 : 1; // 0=Sun,1=Mon
-  const anchor = settings.fortnightStart ? new Date(settings.fortnightStart) : null;
+  if (!settings.fortnightStart) return null;
+  const anchor = parseLocalDate(settings.fortnightStart);
   if (!anchor) return null;
+  // Snap anchor to start day in case it was set to a mid-week date
+  const snapped = snapToStartDay(anchor, settings.calendarStartDay);
   const today = new Date();
   today.setHours(0,0,0,0);
-  anchor.setHours(0,0,0,0);
-  const diffDays = Math.floor((today - anchor) / 86400000);
+  snapped.setHours(0,0,0,0);
+  const diffDays = Math.floor((today - snapped) / 86400000);
   if (diffDays < 0) return null;
   const slotDay = diffDays % 14;
   const week = Math.floor(slotDay / 7);
@@ -430,7 +485,7 @@ function ApprovalCard({ req, child, chore, rate, onApprove, onReject }) {
       </div>
       <div style={{textAlign:"right"}}>
         <div style={{fontWeight:800,color:"var(--amber)",marginBottom:4}}>{pts(chore?.points||0)}</div>
-        <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(chore?.points||0,rate)}</div>
+        <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(chore?.points||0,rate,currency)}</div>
         {req.status==="pending"&&(
           <div style={{display:"flex",gap:5,justifyContent:"flex-end",marginTop:6}}>
             <button className="btn btn-green btn-sm" onClick={onApprove}>✓ Yes</button>
@@ -542,17 +597,19 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
   const dayLabels = buildDayLabels(settings.calendarStartDay);
   const todaySlot = getTodaySlot(settings);
   const rate = settings.pointValue || 0.5;
+  const currency = settings.currency || "AUD";
 
   // Get absolute day index within fortnight (0-13) for a slot
   const slotIndex = (week, day) => week * 7 + day;
 
-  // Get actual date for a slot (if fortnightStart is set)
+  // Get actual date for a slot using timezone-safe parsing + snapping
   const slotDate = (week, day) => {
     if (!settings.fortnightStart) return null;
-    const anchor = new Date(settings.fortnightStart);
-    anchor.setHours(0,0,0,0);
-    const d = new Date(anchor);
-    d.setDate(anchor.getDate() + slotIndex(week, day));
+    const anchor = parseLocalDate(settings.fortnightStart);
+    if (!anchor) return null;
+    const snapped = snapToStartDay(anchor, settings.calendarStartDay);
+    const d = new Date(snapped);
+    d.setDate(snapped.getDate() + slotIndex(week, day));
     return d;
   };
 
@@ -594,6 +651,14 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
     doUpdate(d => ({ ...d, settings: { ...d.settings, calendarStartDay: day } }));
   };
 
+  // Show what date the cycle actually snaps to
+  const snappedAnchor = settings.fortnightStart
+    ? snapToStartDay(parseLocalDate(settings.fortnightStart), settings.calendarStartDay)
+    : null;
+  const snappedLabel = snappedAnchor
+    ? snappedAnchor.toLocaleDateString("en-AU", { weekday:"long", day:"numeric", month:"long", year:"numeric" })
+    : null;
+
   // For child view: filter chores assigned to this child on today's slot
   const todayChores = todaySlot
     ? (choreSchedule||[]).filter(x => x.slot === slotKey(todaySlot.week, todaySlot.day) && x.childId === activeChildId)
@@ -618,7 +683,7 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
               <div style={{ fontSize:"2rem", marginRight:12 }}>{chore.icon}</div>
               <div style={{ flex:1 }}>
                 <div style={{ fontWeight:800 }}>{chore.title}</div>
-                <div style={{ color:"var(--amber)", fontWeight:800, fontSize:".85rem" }}>⭐ {pts(chore.points)} · {money(chore.points, rate)}</div>
+                <div style={{ color:"var(--amber)", fontWeight:800, fontSize:".85rem" }}>⭐ {pts(chore.points)} · {money(chore.points, rate, currency)}</div>
               </div>
               <span className="tag tag-cal">📅 Today</span>
             </div>
@@ -633,9 +698,9 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
     <div>
       {/* Settings bar */}
       <div className="card" style={{ marginBottom:16 }}>
-        <div className="flex-between" style={{ flexWrap:"wrap", gap:12 }}>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:16 }}>
           <div>
-            <div className="form-label">Calendar Start Day</div>
+            <div className="form-label">Week Starts On</div>
             <div style={{ display:"flex", gap:8, marginTop:4 }}>
               {["Mon","Sun"].map(d => (
                 <button key={d} className={`btn btn-sm ${settings.calendarStartDay===d?"btn-blue":"btn-ghost"}`} onClick={()=>setStartDay(d)}>{d}</button>
@@ -643,11 +708,20 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
             </div>
           </div>
           <div style={{ flex:1, minWidth:200 }}>
-            <div className="form-label">Fortnight Cycle Start Date</div>
+            <div className="form-label">Pick any date in Week 1 of your cycle</div>
             <input type="date" className="form-input" style={{ marginTop:4 }}
               value={settings.fortnightStart||""}
               onChange={e=>setFortnightStart(e.target.value)}/>
-            <div style={{ fontSize:".75rem", color:"var(--mid)", fontWeight:600, marginTop:3 }}>Set to the first day of Week 1 of your fortnight cycle.</div>
+            {snappedLabel && (
+              <div style={{ marginTop:6, padding:"6px 10px", background:"var(--mint)", borderRadius:8, fontSize:".78rem", fontWeight:700, color:"#065f46" }}>
+                ✅ Week 1 starts: <strong>{snappedLabel}</strong>
+              </div>
+            )}
+            {!snappedLabel && (
+              <div style={{ marginTop:4, fontSize:".75rem", color:"var(--mid)", fontWeight:600 }}>
+                Pick any date — the calendar will snap back to the nearest {settings.calendarStartDay}.
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -730,7 +804,7 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
                     <span style={{ fontSize:"1.2rem" }}>{chore?.icon}</span>
                     <div style={{ flex:1 }}>
                       <div style={{ fontWeight:700, fontSize:".88rem" }}>{chore?.title}</div>
-                      <div style={{ fontSize:".75rem", color:"var(--mid)" }}>{child?.avatar} {child?.name} · {pts(chore?.points||0)} · {money(chore?.points||0,rate)}</div>
+                      <div style={{ fontSize:".75rem", color:"var(--mid)" }}>{child?.avatar} {child?.name} · {pts(chore?.points||0)} · {money(chore?.points||0,rate,currency)}</div>
                     </div>
                     <button className="btn btn-red btn-sm" onClick={()=>removeChoreFromSlot(cs.slot,cs.childId,cs.choreId)}>✕</button>
                   </div>
@@ -792,6 +866,7 @@ export default function App() {
   const [redeemNudge,setRedeemNudge] = useState(null); // bankId pending confirmation
 
   const rate = data.settings?.pointValue || 0.5;
+  const currency = data.settings?.currency || "AUD";
 
   const doUpdate = fn => {
     let next;
@@ -895,7 +970,7 @@ export default function App() {
               <Av photo={child.photo} emoji={child.avatar} size={54}/>
               <div className="profile-name">{child.name}</div>
               <div className="profile-role">{child.pin?"🔒 PIN protected":"Tap to enter"}</div>
-              <div className="profile-role">⭐ {child.walletPoints} pts · {money(child.walletPoints,rate)}</div>
+              <div className="profile-role">⭐ {child.walletPoints} pts · {money(child.walletPoints,rate,currency)}</div>
             </div>
           ))}
           {data.parents.map(parent=>(
@@ -922,7 +997,7 @@ export default function App() {
           <nav className="nav">
             <div className="nav-logo"><Av photo={child.photo} emoji={child.avatar} size={30}/>{child.name}</div>
             <div className="nav-right">
-              <div className="nav-badge">⭐ {child.walletPoints} · {money(child.walletPoints,rate)}</div>
+              <div className="nav-badge">⭐ {child.walletPoints} · {money(child.walletPoints,rate,currency)}</div>
               <button className="nav-btn ghost" onClick={()=>setScreen("home")}>← Switch</button>
             </div>
           </nav>
@@ -930,7 +1005,7 @@ export default function App() {
             <div className="wallet-card">
               <div className="wallet-label">My Wallet</div>
               <div className="wallet-pts">{child.walletPoints} <span style={{fontSize:"1.4rem"}}>pts</span></div>
-              <div className="wallet-money">{money(child.walletPoints,rate)} value · {rate*100}¢ per point</div>
+              <div className="wallet-money">{money(child.walletPoints,rate,currency)} value · {CURRENCIES.find(c=>c.code===currency)?.symbol||"$"}{rate.toFixed(2)} per point</div>
             </div>
             <div className="tabs">
               {[["chores","🧹 Chores"],["calendar","📅 Schedule"],["wallet","💰 Distribute"],["banks","🏦 Banks"],["history","📋 History"]].map(([t,l])=>(
@@ -951,7 +1026,7 @@ export default function App() {
                         <div style={{fontSize:"2rem"}}>{chore.icon}</div>
                         <div style={{fontWeight:800}}>{chore.title}</div>
                         <div style={{color:"var(--amber)",fontWeight:800,fontSize:".85rem"}}>⭐ {pts(chore.points)}</div>
-                        <div style={{color:"var(--green)",fontWeight:800,fontSize:".85rem"}}>{money(chore.points,rate)}</div>
+                        <div style={{color:"var(--green)",fontWeight:800,fontSize:".85rem"}}>{money(chore.points,rate,currency)}</div>
                         <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
                           {chore.requiresPhoto&&<span className="tag tag-photo">📸 Photo</span>}
                           <span className={`tag ${chore.recurring?"tag-recurring":"tag-oneoff"}`}>{chore.recurring?"🔄":"🎯"}</span>
@@ -982,7 +1057,7 @@ export default function App() {
                       <div style={{fontSize:"1.7rem"}}>{bank.icon}</div>
                       <div className="distribute-info">
                         <div style={{fontWeight:800}}>{bank.name}</div>
-                        <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>{bank.savedPoints}/{bank.costPoints} pts · {money(bank.savedPoints,rate)} / {money(bank.costPoints,rate)}</div>
+                        <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>{bank.savedPoints}/{bank.costPoints} pts · {money(bank.savedPoints,rate,currency)} / {money(bank.costPoints,rate,currency)}</div>
                         <div className="bank-progress" style={{marginTop:4}}><div className="bank-progress-fill" style={{width:`${pct}%`}}/></div>
                       </div>
                       <input className="distribute-input" type="number" min="0" placeholder="0" value={distAmts[bank.id]||""} onChange={e=>setDistAmts(a=>({...a,[bank.id]:e.target.value}))}/>
@@ -1027,7 +1102,7 @@ export default function App() {
                         <div className="bank-progress"><div className="bank-progress-fill" style={{width:`${pct}%`}}/></div>
                         <div className="flex-between">
                           <div style={{fontWeight:800,color:"var(--green)",fontSize:".9rem"}}>{bank.savedPoints}/{bank.costPoints} pts</div>
-                          <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>{money(bank.savedPoints,rate)} / {money(bank.costPoints,rate)}</div>
+                          <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>{money(bank.savedPoints,rate,currency)} / {money(bank.costPoints,rate,currency)}</div>
                         </div>
                         {/* Tally for recurring banks */}
                         {bank.type==="recurring"&&redeemCount>0&&(
@@ -1036,7 +1111,7 @@ export default function App() {
                               💸 Total spent on {bank.name}
                             </div>
                             <div style={{fontWeight:800,fontSize:".92rem",color:"#b45309",marginTop:2}}>
-                              {totalSpentPts} pts · {money(totalSpentPts,rate)} · {redeemCount}x redeemed
+                              {totalSpentPts} pts · {money(totalSpentPts,rate,currency)} · {redeemCount}x redeemed
                             </div>
                             {inspBank&&(
                               <div style={{marginTop:6,fontSize:".75rem",color:"#78350f",fontWeight:700,lineHeight:1.4}}>
@@ -1045,7 +1120,7 @@ export default function App() {
                             )}
                             {!inspBank&&totalSpentPts>0&&(
                               <div style={{marginTop:6,fontSize:".75rem",color:"#78350f",fontWeight:700,lineHeight:1.4}}>
-                                💡 That's {money(totalSpentPts,rate)} — ask a parent to set up a savings goal so you can see what you could have instead!
+                                💡 That's {money(totalSpentPts,rate,currency)} — ask a parent to set up a savings goal so you can see what you could have instead!
                               </div>
                             )}
                           </div>
@@ -1077,7 +1152,7 @@ export default function App() {
                     <div className="request-info"><div style={{fontWeight:800}}>{t.label}</div><div style={{fontSize:".72rem",color:"var(--mid)"}}>{t.time}</div></div>
                     <div style={{textAlign:"right"}}>
                       <div style={{fontWeight:800,color:"var(--green)"}}>+{pts(t.points)}</div>
-                      <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(t.points,rate)}</div>
+                      <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(t.points,rate,currency)}</div>
                     </div>
                   </div>
                 ))}
@@ -1092,7 +1167,7 @@ export default function App() {
                     </div>
                     <div style={{textAlign:"right"}}>
                       <div style={{fontWeight:800,color:"var(--purple)"}}>{pts(Math.abs(t.points))}</div>
-                      <div style={{fontSize:".75rem",color:"var(--purple)",fontWeight:700}}>{money(Math.abs(t.points),rate)}</div>
+                      <div style={{fontSize:".75rem",color:"var(--purple)",fontWeight:700}}>{money(Math.abs(t.points),rate,currency)}</div>
                     </div>
                   </div>
                 ))}
@@ -1105,7 +1180,7 @@ export default function App() {
                       <div className="request-info"><div style={{fontWeight:800}}>{chore?.title||"Chore"}</div><div style={{fontSize:".72rem",color:"var(--mid)"}}>{req.time}</div></div>
                       <div style={{textAlign:"right"}}>
                         <div style={{fontWeight:800,color:"var(--amber)"}}>+{pts(chore?.points||0)}</div>
-                        <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(chore?.points||0,rate)}</div>
+                        <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(chore?.points||0,rate,currency)}</div>
                         <span className={`status status-${req.status}`}>{req.status}</span>
                       </div>
                     </div>
@@ -1121,7 +1196,7 @@ export default function App() {
             <div style={{fontSize:"2.8rem",textAlign:"center",marginBottom:10}}>{claimChore.icon}</div>
             <div className="modal-title" style={{textAlign:"center"}}>{claimChore.title}</div>
             <div style={{textAlign:"center",marginBottom:18}}>
-              <span className="val-badge">⭐ {pts(claimChore.points)} · {money(claimChore.points,rate)}</span>
+              <span className="val-badge">⭐ {pts(claimChore.points)} · {money(claimChore.points,rate,currency)}</span>
             </div>
             {claimChore.requiresPhoto&&(
               <div className="form-group">
@@ -1158,7 +1233,7 @@ export default function App() {
               {/* What they're spending now */}
               <div style={{background:"var(--lavender)",borderRadius:12,padding:14,marginBottom:12}}>
                 <div style={{fontWeight:800,color:"var(--purple)",fontSize:".9rem",marginBottom:4}}>You're about to spend:</div>
-                <div style={{fontWeight:900,fontSize:"1.2rem",color:"var(--purple)"}}>{pts(bank.costPoints)} · {money(bank.costPoints,rate)}</div>
+                <div style={{fontWeight:900,fontSize:"1.2rem",color:"var(--purple)"}}>{pts(bank.costPoints)} · {money(bank.costPoints,rate,currency)}</div>
                 <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600,marginTop:4}}>for: {bank.reward}</div>
               </div>
 
@@ -1169,11 +1244,11 @@ export default function App() {
                     💸 Your {bank.name} tab so far
                   </div>
                   <div style={{fontWeight:900,fontSize:"1.1rem",color:"#b45309"}}>
-                    {totalSpentPts>0?`${totalSpentPts} pts · ${money(totalSpentPts,rate)} spent (${redeemTxs.length}x)`:"This will be your first time!"}
+                    {totalSpentPts>0?`${totalSpentPts} pts · ${money(totalSpentPts,rate,currency)} spent (${redeemTxs.length}x)`:"This will be your first time!"}
                   </div>
                   {totalSpentPts>0&&(
                     <div style={{fontWeight:800,fontSize:".82rem",color:"#92400e",marginTop:4}}>
-                      After this redeem: {afterRedeemTotal} pts · {money(afterRedeemTotal,rate)} total
+                      After this redeem: {afterRedeemTotal} pts · {money(afterRedeemTotal,rate,currency)} total
                     </div>
                   )}
                 </div>
@@ -1184,7 +1259,7 @@ export default function App() {
                 <div style={{background:"var(--mint)",borderRadius:12,padding:14,marginBottom:16,border:"2px solid var(--green)"}}>
                   <div style={{fontWeight:800,color:"var(--green)",fontSize:".85rem",marginBottom:6}}>💡 Did you know?</div>
                   <div style={{fontWeight:700,fontSize:".82rem",color:"#065f46",lineHeight:1.5}}>
-                    If you saved this {money(bank.costPoints,rate)} instead, you'd be{" "}
+                    If you saved this {money(bank.costPoints,rate,currency)} instead, you'd be{" "}
                     <strong style={{fontSize:"1rem",color:"var(--green)"}}>{inspPct}%</strong>{" "}
                     of the way to your <strong>{inspBank.name}</strong> goal {inspBank.icon}
                   </div>
@@ -1193,7 +1268,7 @@ export default function App() {
                       <div style={{height:"100%",borderRadius:99,background:"var(--green)",width:`${inspPct}%`,transition:"width .4s"}}/>
                     </div>
                     <div style={{fontSize:".75rem",color:"var(--mid)",fontWeight:600,marginTop:4}}>
-                      {inspBank.costPoints-Math.min(inspBank.costPoints,afterRedeemTotal)} pts ({money(Math.max(0,inspBank.costPoints-afterRedeemTotal),rate)}) still needed
+                      {inspBank.costPoints-Math.min(inspBank.costPoints,afterRedeemTotal)} pts ({money(Math.max(0,inspBank.costPoints-afterRedeemTotal),rate,currency)}) still needed
                     </div>
                   </div>
                 </div>
@@ -1271,7 +1346,7 @@ export default function App() {
                       <div style={{fontSize:"2rem"}}>{chore.icon}</div>
                       <div style={{fontWeight:800}}>{chore.title}</div>
                       <div style={{color:"var(--amber)",fontWeight:800,fontSize:".85rem"}}>⭐ {pts(chore.points)}</div>
-                      <div style={{color:"var(--green)",fontWeight:700,fontSize:".82rem"}}>{money(chore.points,rate)} value</div>
+                      <div style={{color:"var(--green)",fontWeight:700,fontSize:".82rem"}}>{money(chore.points,rate,currency)} value</div>
                       <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
                         {chore.requiresPhoto&&<span className="tag tag-photo">📸 Photo</span>}
                         <span className={`tag ${chore.recurring?"tag-recurring":"tag-oneoff"}`}>{chore.recurring?"🔄":"🎯"}</span>
@@ -1313,7 +1388,7 @@ export default function App() {
                           <div className="bank-progress"><div className="bank-progress-fill" style={{width:`${pct}%`}}/></div>
                           <div className="flex-between">
                             <div style={{fontWeight:800,color:"var(--green)",fontSize:".88rem"}}>{bank.savedPoints}/{bank.costPoints} pts</div>
-                            <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>{money(bank.costPoints,rate)}</div>
+                            <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>{money(bank.costPoints,rate,currency)}</div>
                           </div>
                           <button className="btn btn-red btn-sm" onClick={()=>doUpdate(d=>({...d,banks:d.banks.filter(b=>b.id!==bank.id)}))}>🗑 Remove</button>
                         </div>
@@ -1340,8 +1415,8 @@ export default function App() {
                           <Av photo={child.photo} emoji={child.avatar} size={50}/>
                           <div>
                             <div style={{fontWeight:800,fontSize:"1.05rem"}}>{child.name}</div>
-                            <div style={{color:"var(--mid)",fontSize:".82rem",fontWeight:600}}>Wallet: {child.walletPoints} pts · {money(child.walletPoints,rate)}</div>
-                            <div style={{color:"var(--mid)",fontSize:".78rem",fontWeight:600}}>Earned total: {earned} pts · {money(earned,rate)}</div>
+                            <div style={{color:"var(--mid)",fontSize:".82rem",fontWeight:600}}>Wallet: {child.walletPoints} pts · {money(child.walletPoints,rate,currency)}</div>
+                            <div style={{color:"var(--mid)",fontSize:".78rem",fontWeight:600}}>Earned total: {earned} pts · {money(earned,rate,currency)}</div>
                             <div style={{fontSize:".78rem",marginTop:2}}>{child.pin?<span style={{color:"var(--green)",fontWeight:700}}>🔒 PIN active</span>:<span style={{color:"var(--mid)",fontWeight:600}}>No PIN</span>}</div>
                           </div>
                         </div>
@@ -1361,18 +1436,42 @@ export default function App() {
             {parentTab==="settings"&&(
               <>
                 {/* Point value editor */}
-                <div className="section-title">💰 Point Value</div>
+                <div className="section-title">💰 Currency & Point Value</div>
                 <div className="card" style={{marginBottom:20}}>
-                  <div style={{fontWeight:800,marginBottom:6}}>How much is 1 point worth?</div>
+                  {/* Currency selector */}
+                  <div style={{fontWeight:800,marginBottom:8}}>Currency</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:6,marginBottom:16}}>
+                    {CURRENCIES.map(cur=>(
+                      <div key={cur.code}
+                        onClick={()=>doUpdate(d=>({...d,settings:{...d.settings,currency:cur.code}}))}
+                        style={{
+                          display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:10,cursor:"pointer",
+                          border: currency===cur.code ? "2px solid var(--blue)" : "2px solid #e2e8f0",
+                          background: currency===cur.code ? "var(--sky)" : "#f8fafc",
+                          fontWeight:700,fontSize:".82rem"
+                        }}>
+                        <span style={{fontSize:"1.2rem"}}>{cur.flag}</span>
+                        <div>
+                          <div style={{fontWeight:800,color:currency===cur.code?"var(--blue)":"var(--dark)"}}>{cur.code}</div>
+                          <div style={{fontSize:".7rem",color:"var(--mid)",fontWeight:600}}>{cur.symbol} · {cur.name}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="divider" style={{margin:"12px 0"}}/>
+
+                  {/* Point value */}
+                  <div style={{fontWeight:800,marginBottom:8}}>How much is 1 point worth?</div>
                   <div style={{display:"flex",alignItems:"center",gap:12}}>
-                    <span style={{fontWeight:700,fontSize:"1.1rem"}}>$</span>
+                    <span style={{fontWeight:700,fontSize:"1.1rem"}}>{CURRENCIES.find(c=>c.code===currency)?.symbol||"$"}</span>
                     <input className="form-input" type="number" min="0.01" step="0.05" style={{width:120}}
                       value={rate}
                       onChange={e=>doUpdate(d=>({...d,settings:{...d.settings,pointValue:+e.target.value}}))}/>
                     <span style={{fontWeight:600,color:"var(--mid)"}}>per point</span>
                   </div>
                   <div style={{marginTop:10,fontSize:".85rem",color:"var(--mid)",fontWeight:600}}>
-                    Currently: 1 point = <strong>${rate.toFixed(2)}</strong> · 10 points = <strong>${(rate*10).toFixed(2)}</strong>
+                    Currently: 1 point = <strong>{money(1,rate,currency)}</strong> · 10 points = <strong>{money(10,rate,currency)}</strong>
                   </div>
                   <div style={{marginTop:6,fontSize:".8rem",color:"var(--mid)"}}>
                     Tip: This is a great way to teach kids the real value of money. Start at 50¢ and adjust as they grow.
@@ -1422,12 +1521,12 @@ export default function App() {
               <div style={{textAlign:"center",marginBottom:12}}><Av photo={child?.photo} emoji={child?.avatar} size={64}/></div>
               <div className="modal-title" style={{textAlign:"center"}}>🎁 Gift Points to {child?.name}</div>
               <div style={{background:"var(--yellow)",borderRadius:12,padding:12,marginBottom:18,fontSize:".88rem",fontWeight:700,color:"#92400e"}}>
-                1 point = {money(1,rate)} · Wallet: {child?.walletPoints} pts ({money(child?.walletPoints||0,rate)})
+                1 point = {money(1,rate,currency)} · Wallet: {child?.walletPoints} pts ({money(child?.walletPoints||0,rate,currency)})
               </div>
               <div className="form-group">
                 <label className="form-label">Points to Gift</label>
                 <input className="form-input" type="number" min="1" placeholder="e.g. 10" value={giftPts} onChange={e=>setGiftPts(e.target.value)}/>
-                {giftPts>0&&<div style={{fontSize:".82rem",color:"var(--green)",fontWeight:700,marginTop:5}}>= {money(+giftPts,rate)} added to wallet</div>}
+                {giftPts>0&&<div style={{fontSize:".82rem",color:"var(--green)",fontWeight:700,marginTop:5}}>= {money(+giftPts,rate,currency)} added to wallet</div>}
               </div>
               <div className="form-group">
                 <label className="form-label">Note (optional)</label>
