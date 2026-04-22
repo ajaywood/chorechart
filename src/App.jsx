@@ -1043,6 +1043,512 @@ function ChecklistManager({ data, doUpdate, children, rate, currency }) {
   );
 }
 
+// ─── Age-appropriate chore suggestions ───────────────────────────────────────
+function choresuggestions(age) {
+  const all = [
+    { title:"Put toys away",        icon:"🧸", points:1, requiresPhoto:false, recurring:true, minAge:2,  maxAge:6  },
+    { title:"Help set the table",   icon:"🍽️", points:1, requiresPhoto:false, recurring:true, minAge:3,  maxAge:7  },
+    { title:"Feed the pet",         icon:"🐾", points:2, requiresPhoto:false, recurring:true, minAge:4,  maxAge:99 },
+    { title:"Water the plants",     icon:"🌿", points:2, requiresPhoto:false, recurring:true, minAge:4,  maxAge:99 },
+    { title:"Make bed",             icon:"🛏️", points:2, requiresPhoto:true,  recurring:true, minAge:5,  maxAge:99 },
+    { title:"Tidy bedroom",         icon:"🧹", points:3, requiresPhoto:true,  recurring:true, minAge:5,  maxAge:99 },
+    { title:"Put laundry away",     icon:"👕", points:2, requiresPhoto:false, recurring:true, minAge:5,  maxAge:99 },
+    { title:"Unstack dishwasher",   icon:"🍽️", points:2, requiresPhoto:false, recurring:true, minAge:6,  maxAge:99 },
+    { title:"Wipe down benches",    icon:"🧽", points:2, requiresPhoto:false, recurring:true, minAge:6,  maxAge:99 },
+    { title:"Vacuum living room",   icon:"🧹", points:3, requiresPhoto:true,  recurring:true, minAge:7,  maxAge:99 },
+    { title:"Take out rubbish",     icon:"🗑️", points:2, requiresPhoto:false, recurring:true, minAge:7,  maxAge:99 },
+    { title:"Wash dishes",          icon:"🧼", points:3, requiresPhoto:false, recurring:true, minAge:8,  maxAge:99 },
+    { title:"Clean bathroom",       icon:"🚿", points:4, requiresPhoto:true,  recurring:true, minAge:9,  maxAge:99 },
+    { title:"Mow the lawn",         icon:"🌿", points:5, requiresPhoto:true,  recurring:true, minAge:11, maxAge:99 },
+    { title:"Cook a simple meal",   icon:"🍳", points:5, requiresPhoto:true,  recurring:true, minAge:12, maxAge:99 },
+    { title:"Do own laundry",       icon:"🧺", points:4, requiresPhoto:false, recurring:true, minAge:12, maxAge:99 },
+    { title:"Wash the car",         icon:"🚗", points:5, requiresPhoto:true,  recurring:true, minAge:10, maxAge:99 },
+    { title:"Grocery run help",     icon:"🛒", points:3, requiresPhoto:false, recurring:true, minAge:10, maxAge:99 },
+  ];
+  return all.filter(c => age >= c.minAge && age <= c.maxAge);
+}
+
+// ─── SetupWizard ──────────────────────────────────────────────────────────────
+function SetupWizard({ onComplete }) {
+  const TOTAL_STEPS = 8;
+  const [step, setStep]           = useState(1);
+  const [familyName, setFamilyName] = useState("");
+  const [parentName, setParentName] = useState("");
+  const [parentPin, setParentPin]   = useState("");
+  const [parentPin2, setParentPin2] = useState("");
+  const [pinErr, setPinErr]         = useState("");
+  const [numKids, setNumKids]       = useState(1);
+  const [kids, setKids]             = useState([{ name:"", age:"", avatar:"🦁" }]);
+  const [currency2, setCurrency2]   = useState("AUD");
+  const [pointVal, setPointVal]     = useState(0.50);
+  const [selectedChores, setSelectedChores] = useState({}); // { kidIndex: Set of chore titles }
+  const [goalBanks, setGoalBanks]   = useState([]); // [{ kidIndex, name, points }]
+  const [hasSplitCare, setHasSplitCare] = useState(null);
+  const [calStartDay, setCalStartDay] = useState("Mon");
+  const [calAnchor, setCalAnchor]   = useState("");
+
+  const avatarList = ["🦁","🐯","🦊","🐨","🐼","🐸","🦄","🐙","🦋","🐬","🦖","🐧","🦅","🐻","🦝"];
+
+  const setKid = (i, k, v) => setKids(arr => arr.map((c,idx)=>idx===i?{...c,[k]:v}:c));
+
+  const updateNumKids = n => {
+    setNumKids(n);
+    setKids(arr => {
+      const next = [...arr];
+      while(next.length < n) next.push({name:"",age:"",avatar:avatarList[next.length%avatarList.length]});
+      return next.slice(0,n);
+    });
+  };
+
+  const toggleChore = (kidIdx, chore) => {
+    setSelectedChores(prev => {
+      const set = new Set(prev[kidIdx]||[]);
+      set.has(chore.title) ? set.delete(chore.title) : set.add(chore.title);
+      return {...prev, [kidIdx]: set};
+    });
+  };
+
+  const isChoreSelected = (kidIdx, title) => (selectedChores[kidIdx]||new Set()).has(title);
+
+  const snappedAnchor = calAnchor ? snapToStartDay(parseLocalDate(calAnchor), calStartDay) : null;
+  const snappedLabel  = snappedAnchor ? snappedAnchor.toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",year:"numeric"}) : null;
+
+  const canNext = () => {
+    if(step===2) return familyName.trim() && parentName.trim() && parentPin.length===4 && parentPin===parentPin2;
+    if(step===3) return kids.every(k=>k.name.trim() && k.age);
+    if(step===4) return true;
+    if(step===5) return true;
+    if(step===6) return true;
+    if(step===7) return true;
+    return true;
+  };
+
+  const finish = () => {
+    const newChildren = kids.map((k,i) => ({
+      id: uid(), name:k.name.trim(), avatar:k.avatar, photo:null,
+      walletPoints:0, pin:null, achievements:[], age:+k.age,
+    }));
+
+    const choreList = [];
+    kids.forEach((k,i) => {
+      const suggestions = choresuggestions(+k.age);
+      const sel = selectedChores[i]||new Set();
+      suggestions.filter(c=>sel.has(c.title)).forEach(c=>{
+        if (!choreList.find(x=>x.title===c.title)) {
+          choreList.push({...c, id:uid(), assignedTo:"all"});
+        } else {
+          // already added — skip duplicate titles
+        }
+      });
+    });
+
+    const bankList = goalBanks
+      .filter(b=>b.name&&b.points)
+      .map(b=>({
+        id:uid(), childId:newChildren[b.kidIndex]?.id,
+        name:b.name, icon:"🎯", type:"goal",
+        costPoints:+b.points, reward:b.name, savedPoints:0
+      }));
+
+    const newData = {
+      ...defaultData,
+      parents: [{ id:"p1", name:parentName.trim(), pin:parentPin, photo:null, avatar:"👤" }],
+      children: newChildren,
+      chores: choreList.length > 0 ? choreList : defaultData.chores,
+      banks: bankList,
+      checklistItems: defaultData.checklistItems,
+      settings: {
+        pointValue: +pointVal,
+        currency: currency2,
+        calendarStartDay: calStartDay,
+        fortnightStart: hasSplitCare && snappedAnchor ? snappedAnchor.toISOString().split("T")[0] : null,
+        familyName: familyName.trim(),
+        setupComplete: true,
+      },
+    };
+    saveData(newData);
+    onComplete(newData);
+  };
+
+  const next = () => {
+    if(step===2){ setPinErr(""); if(parentPin!==parentPin2){setPinErr("PINs do not match.");return;} }
+    if(step===TOTAL_STEPS){ finish(); return; }
+    setStep(s=>s+1);
+  };
+  const back = () => setStep(s=>s-1);
+
+  // Step styles
+  const wrapStyle = { minHeight:"100vh", background:"linear-gradient(160deg,#e0f2fe 0%,#ede9fe 100%)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"flex-start", padding:"32px 20px 60px" };
+  const cardStyle = { background:"white", borderRadius:20, padding:"28px 24px", width:"100%", maxWidth:500, boxShadow:"0 8px 40px rgba(0,0,0,.12)" };
+  const progressPct = Math.round(((step-1)/TOTAL_STEPS)*100);
+
+  const ProgressBar = () => (
+    <div style={{width:"100%",maxWidth:500,marginBottom:20}}>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:".78rem",fontWeight:700,color:"var(--mid)",marginBottom:6}}>
+        <span>Step {step} of {TOTAL_STEPS}</span><span>{progressPct}% complete</span>
+      </div>
+      <div style={{height:8,background:"rgba(255,255,255,.6)",borderRadius:99,overflow:"hidden"}}>
+        <div style={{height:"100%",background:"var(--blue)",borderRadius:99,width:`${progressPct}%`,transition:"width .4s"}}/>
+      </div>
+    </div>
+  );
+
+  const Tip = ({text}) => (
+    <div style={{background:"var(--sky)",borderRadius:10,padding:"9px 12px",marginBottom:16,fontSize:".8rem",fontWeight:700,color:"var(--blue)",lineHeight:1.5}}>
+      💡 {text}
+    </div>
+  );
+
+  const NavButtons = ({nextLabel="Next →", nextDisabled=false}) => (
+    <div style={{display:"flex",gap:10,marginTop:20}}>
+      {step>1&&<button className="btn btn-ghost" style={{flex:1}} onClick={back}>← Back</button>}
+      <button className="btn btn-blue" style={{flex:2}} onClick={next} disabled={!canNext()||nextDisabled}>{nextLabel}</button>
+    </div>
+  );
+
+  return (
+    <>
+      <style>{styles}</style>
+      <div style={wrapStyle}>
+        {/* Logo */}
+        <div style={{textAlign:"center",marginBottom:24}}>
+          <div style={{fontSize:"3rem",marginBottom:4}}>⭐</div>
+          <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.8rem",color:"var(--dark)"}}>ChoreChart</div>
+        </div>
+
+        <ProgressBar/>
+
+        <div style={cardStyle}>
+
+          {/* ── STEP 1: WELCOME ── */}
+          {step===1&&(
+            <>
+              <div style={{textAlign:"center",marginBottom:20}}>
+                <div style={{fontSize:"3rem",marginBottom:8}}>👋</div>
+                <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.5rem",marginBottom:8}}>Welcome to ChoreChart!</div>
+                <div style={{color:"var(--mid)",fontWeight:600,fontSize:".9rem",lineHeight:1.6}}>
+                  ChoreChart helps your family build great habits, earn rewards, and learn the real value of money — all in one place.
+                </div>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:20}}>
+                {[
+                  ["🧹","Kids earn points for completing chores"],
+                  ["✅","Parents approve each chore before points are awarded"],
+                  ["🏦","Points go into savings banks toward goals"],
+                  ["💰","Every point has a real dollar value you set"],
+                  ["🏅","Badges and streaks keep kids motivated"],
+                ].map(([icon,text])=>(
+                  <div key={text} style={{display:"flex",gap:12,alignItems:"center",padding:"10px 12px",background:"#f8fafc",borderRadius:12}}>
+                    <span style={{fontSize:"1.4rem"}}>{icon}</span>
+                    <span style={{fontWeight:600,fontSize:".88rem",color:"var(--dark)"}}>{text}</span>
+                  </div>
+                ))}
+              </div>
+              <Tip text="Setup takes about 3 minutes. You can change everything later in the parent portal."/>
+              <button className="btn btn-blue" style={{width:"100%"}} onClick={()=>setStep(2)}>Let's get started →</button>
+            </>
+          )}
+
+          {/* ── STEP 2: FAMILY + PARENT ── */}
+          {step===2&&(
+            <>
+              <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.3rem",marginBottom:6}}>👨‍👩‍👧 Your Family</div>
+              <Tip text="Your family name appears on the home screen. Your PIN keeps the parent portal secure — keep it private from the kids!"/>
+              <div className="form-group">
+                <label className="form-label">Family Name</label>
+                <input className="form-input" placeholder="e.g. The Smiths" value={familyName} onChange={e=>setFamilyName(e.target.value)}/>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Your Name (Parent)</label>
+                <input className="form-input" placeholder="e.g. Mum / Dad / Sarah" value={parentName} onChange={e=>setParentName(e.target.value)}/>
+              </div>
+              <div className="form-row">
+                <div className="form-group mb-0">
+                  <label className="form-label">Your 4-digit PIN</label>
+                  <input className="form-input" type="password" maxLength={4} placeholder="••••" value={parentPin} onChange={e=>setParentPin(e.target.value.replace(/\D/g,"").slice(0,4))}/>
+                </div>
+                <div className="form-group mb-0">
+                  <label className="form-label">Confirm PIN</label>
+                  <input className="form-input" type="password" maxLength={4} placeholder="••••" value={parentPin2} onChange={e=>setParentPin2(e.target.value.replace(/\D/g,"").slice(0,4))}/>
+                </div>
+              </div>
+              {pinErr&&<div style={{color:"var(--red)",fontWeight:700,fontSize:".85rem",marginTop:6}}>{pinErr}</div>}
+              <NavButtons/>
+            </>
+          )}
+
+          {/* ── STEP 3: CHILDREN ── */}
+          {step===3&&(
+            <>
+              <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.3rem",marginBottom:6}}>👦 Your Children</div>
+              <Tip text="Ages help us suggest the right chores for each child on the next step."/>
+              <div className="form-group">
+                <label className="form-label">How many children?</label>
+                <div style={{display:"flex",gap:8}}>
+                  {[1,2,3,4,5].map(n=>(
+                    <div key={n} onClick={()=>updateNumKids(n)}
+                      style={{flex:1,textAlign:"center",padding:"10px 4px",borderRadius:10,cursor:"pointer",fontWeight:800,fontSize:"1.1rem",
+                        background:numKids===n?"var(--blue)":"#f1f5f9",color:numKids===n?"white":"var(--dark)",
+                        border:numKids===n?"2px solid var(--blue)":"2px solid transparent"}}>
+                      {n}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {kids.map((kid,i)=>(
+                <div key={i} style={{background:"#f8fafc",borderRadius:14,padding:14,marginBottom:10}}>
+                  <div style={{fontWeight:800,marginBottom:10,color:"var(--mid)",fontSize:".82rem"}}>Child {i+1}</div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                    {avatarList.map(av=>(
+                      <div key={av} onClick={()=>setKid(i,"avatar",av)}
+                        style={{fontSize:"1.4rem",cursor:"pointer",padding:5,borderRadius:8,
+                          background:kid.avatar===av?"#dbeafe":"white",
+                          border:kid.avatar===av?"2px solid #3b82f6":"2px solid transparent"}}>
+                        {av}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group mb-0">
+                      <label className="form-label">Name</label>
+                      <input className="form-input" placeholder="e.g. Alex" value={kid.name} onChange={e=>setKid(i,"name",e.target.value)}/>
+                    </div>
+                    <div className="form-group mb-0">
+                      <label className="form-label">Age</label>
+                      <input className="form-input" type="number" min="2" max="18" placeholder="e.g. 8" value={kid.age} onChange={e=>setKid(i,"age",e.target.value)}/>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <NavButtons/>
+            </>
+          )}
+
+          {/* ── STEP 4: CURRENCY + POINTS ── */}
+          {step===4&&(
+            <>
+              <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.3rem",marginBottom:6}}>💰 Points & Money</div>
+              <Tip text="Points are what kids earn for chores. Each point has a real dollar value — this teaches them what their effort is worth in the real world."/>
+              <div className="form-group">
+                <label className="form-label">Your Currency</label>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:6,maxHeight:220,overflowY:"auto"}}>
+                  {CURRENCIES.map(cur=>(
+                    <div key={cur.code} onClick={()=>setCurrency2(cur.code)}
+                      style={{display:"flex",alignItems:"center",gap:7,padding:"7px 9px",borderRadius:10,cursor:"pointer",
+                        border:currency2===cur.code?"2px solid var(--blue)":"2px solid #e2e8f0",
+                        background:currency2===cur.code?"var(--sky)":"#f8fafc",fontWeight:700,fontSize:".78rem"}}>
+                      <span style={{fontSize:"1.1rem"}}>{cur.flag}</span>
+                      <div>
+                        <div style={{fontWeight:800,color:currency2===cur.code?"var(--blue)":"var(--dark)",fontSize:".8rem"}}>{cur.code}</div>
+                        <div style={{fontSize:".68rem",color:"var(--mid)"}}>{cur.symbol}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="form-group" style={{marginTop:12}}>
+                <label className="form-label">How much is 1 point worth?</label>
+                <div style={{display:"flex",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+                  {[0.10,0.20,0.50,1.00,2.00].map(v=>(
+                    <div key={v} onClick={()=>setPointVal(v)}
+                      style={{padding:"8px 12px",borderRadius:10,cursor:"pointer",fontWeight:800,fontSize:".88rem",
+                        background:pointVal===v?"var(--amber)":"#f1f5f9",color:pointVal===v?"white":"var(--dark)",
+                        border:pointVal===v?"2px solid var(--amber)":"2px solid transparent"}}>
+                      {CURRENCIES.find(c=>c.code===currency2)?.symbol}{v.toFixed(2)}
+                    </div>
+                  ))}
+                </div>
+                <input className="form-input" type="number" min="0.01" step="0.05"
+                  value={pointVal} onChange={e=>setPointVal(+e.target.value)}/>
+                <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600,marginTop:6}}>
+                  10 chore points = {CURRENCIES.find(c=>c.code===currency2)?.symbol}{(10*pointVal).toFixed(2)} in real money
+                </div>
+              </div>
+              <NavButtons/>
+            </>
+          )}
+
+          {/* ── STEP 5: CHORES ── */}
+          {step===5&&(
+            <>
+              <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.3rem",marginBottom:6}}>🧹 Suggested Chores</div>
+              <Tip text="We have suggested chores based on each child age. Tap to select the ones that apply to your family. You can add more anytime in the parent portal."/>
+              {kids.map((kid,i)=>{
+                const suggestions = choresuggestions(+kid.age||5);
+                return(
+                  <div key={i} style={{marginBottom:16}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,fontWeight:800}}>
+                      <span style={{fontSize:"1.4rem"}}>{kid.avatar}</span>{kid.name||`Child ${i+1}`}
+                      <span style={{fontSize:".75rem",color:"var(--mid)",fontWeight:600}}>Age {kid.age}</span>
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {suggestions.map(chore=>{
+                        const sel = isChoreSelected(i, chore.title);
+                        return(
+                          <div key={chore.title} onClick={()=>toggleChore(i,chore)}
+                            style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:12,cursor:"pointer",
+                              background:sel?"var(--mint)":"#f8fafc",
+                              border:`2px solid ${sel?"var(--green)":"#e2e8f0"}`,transition:"all .15s"}}>
+                            <span style={{fontSize:"1.3rem"}}>{chore.icon}</span>
+                            <div style={{flex:1}}>
+                              <div style={{fontWeight:700,fontSize:".88rem"}}>{chore.title}</div>
+                              <div style={{fontSize:".72rem",color:"var(--mid)",fontWeight:600}}>⭐ {chore.points} pts{chore.requiresPhoto?" · 📸 photo":""}</div>
+                            </div>
+                            <div style={{width:24,height:24,borderRadius:6,border:`2px solid ${sel?"var(--green)":"#e2e8f0"}`,background:sel?"var(--green)":"white",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:".8rem",flexShrink:0}}>
+                              {sel?"✓":""}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {suggestions.length===0&&<div style={{fontSize:".85rem",color:"var(--mid)",fontWeight:600,padding:"8px 0"}}>No suggestions for this age — add chores manually in the parent portal.</div>}
+                    </div>
+                  </div>
+                );
+              })}
+              <NavButtons nextLabel={Object.values(selectedChores).some(s=>s.size>0)?"Next →":"Skip →"}/>
+            </>
+          )}
+
+          {/* ── STEP 6: SAVINGS GOALS ── */}
+          {step===6&&(
+            <>
+              <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.3rem",marginBottom:6}}>🎯 First Savings Goals</div>
+              <Tip text="Giving each child a goal to save toward makes the app meaningful from day one. What is each child saving up for right now?"/>
+              {kids.map((kid,i)=>{
+                const bank = goalBanks.find(b=>b.kidIndex===i)||{kidIndex:i,name:"",points:""};
+                const updateBank = (k,v)=>setGoalBanks(prev=>{
+                  const next=prev.filter(b=>b.kidIndex!==i);
+                  return [...next,{...bank,[k]:v}];
+                });
+                return(
+                  <div key={i} style={{background:"#f8fafc",borderRadius:14,padding:14,marginBottom:12}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,fontWeight:800}}>
+                      <span style={{fontSize:"1.4rem"}}>{kid.avatar}</span>{kid.name||`Child ${i+1}`}
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">What are they saving for?</label>
+                      <input className="form-input" placeholder="e.g. New bike, LEGO set, game..." value={bank.name} onChange={e=>updateBank("name",e.target.value)}/>
+                    </div>
+                    <div className="form-group mb-0">
+                      <label className="form-label">How many points to reach the goal?</label>
+                      <input className="form-input" type="number" min="1" placeholder="e.g. 50" value={bank.points} onChange={e=>updateBank("points",e.target.value)}/>
+                      {bank.points>0&&<div style={{fontSize:".75rem",color:"var(--mid)",fontWeight:600,marginTop:4}}>
+                        = {CURRENCIES.find(c=>c.code===currency2)?.symbol}{(+bank.points*+pointVal).toFixed(2)} in real money
+                      </div>}
+                    </div>
+                  </div>
+                );
+              })}
+              <NavButtons nextLabel={goalBanks.some(b=>b.name&&b.points)?"Next →":"Skip →"}/>
+            </>
+          )}
+
+          {/* ── STEP 7: SPLIT CARE ── */}
+          {step===7&&(
+            <>
+              <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.3rem",marginBottom:6}}>📅 Care Arrangement</div>
+              <Tip text="If your children move between two homes, ChoreChart can track a 2-week care cycle so streaks and schedules only count days your child is with you."/>
+              <div style={{marginBottom:16}}>
+                <div style={{fontWeight:700,marginBottom:10,fontSize:".9rem"}}>Do you have a split care arrangement?</div>
+                <div style={{display:"flex",gap:10}}>
+                  {[["yes","Yes, we have split care"],["no","No, kids are with me full time"]].map(([val,label])=>(
+                    <div key={val} onClick={()=>setHasSplitCare(val==="yes")}
+                      style={{flex:1,padding:"12px 10px",borderRadius:12,cursor:"pointer",textAlign:"center",fontWeight:700,fontSize:".85rem",
+                        background:hasSplitCare===(val==="yes")?"var(--blue)":"#f1f5f9",
+                        color:hasSplitCare===(val==="yes")?"white":"var(--dark)",
+                        border:hasSplitCare===(val==="yes")?"2px solid var(--blue)":"2px solid transparent"}}>
+                      {label}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {hasSplitCare===true&&(
+                <>
+                  <div className="form-group">
+                    <label className="form-label">Week starts on</label>
+                    <div style={{display:"flex",gap:8}}>
+                      {["Mon","Sun"].map(d=>(
+                        <button key={d} className={`btn btn-sm ${calStartDay===d?"btn-blue":"btn-ghost"}`} onClick={()=>setCalStartDay(d)}>{d}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Pick any date in Week 1 of your care cycle</label>
+                    <input type="date" className="form-input" value={calAnchor} onChange={e=>setCalAnchor(e.target.value)}/>
+                    {snappedLabel&&<div style={{marginTop:6,padding:"6px 10px",background:"var(--mint)",borderRadius:8,fontSize:".78rem",fontWeight:700,color:"#065f46"}}>
+                      ✅ Week 1 starts: <strong>{snappedLabel}</strong>
+                    </div>}
+                  </div>
+                </>
+              )}
+              {hasSplitCare===false&&(
+                <div style={{background:"var(--mint)",borderRadius:12,padding:12,fontSize:".85rem",fontWeight:700,color:"#065f46"}}>
+                  No problem! You can set up the calendar later in the parent portal if your situation changes.
+                </div>
+              )}
+              <NavButtons nextLabel="Next →"/>
+            </>
+          )}
+
+          {/* ── STEP 8: ALL DONE ── */}
+          {step===8&&(
+            <>
+              <div style={{textAlign:"center",marginBottom:20}}>
+                <div style={{fontSize:"3.5rem",marginBottom:8}}>🎉</div>
+                <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.5rem",marginBottom:8}}>
+                  {familyName ? `Welcome, ${familyName}!` : "You're all set!"}
+                </div>
+                <div style={{color:"var(--mid)",fontWeight:600,fontSize:".88rem",lineHeight:1.6}}>
+                  Everything is ready to go. Here is a summary of what has been set up:
+                </div>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:20}}>
+                <div style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px",background:"#f8fafc",borderRadius:12}}>
+                  <span style={{fontSize:"1.3rem"}}>👤</span>
+                  <div style={{fontWeight:700,fontSize:".88rem"}}>{parentName} — parent portal with PIN ••••</div>
+                </div>
+                <div style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px",background:"#f8fafc",borderRadius:12}}>
+                  <span style={{fontSize:"1.3rem"}}>👦</span>
+                  <div style={{fontWeight:700,fontSize:".88rem"}}>{kids.map(k=>k.name).join(", ")} added as {kids.length===1?"a child":"children"}</div>
+                </div>
+                <div style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px",background:"#f8fafc",borderRadius:12}}>
+                  <span style={{fontSize:"1.3rem"}}>💰</span>
+                  <div style={{fontWeight:700,fontSize:".88rem"}}>1 point = {CURRENCIES.find(c=>c.code===currency2)?.symbol}{(+pointVal).toFixed(2)} ({currency2})</div>
+                </div>
+                {Object.values(selectedChores).some(s=>s.size>0)&&(
+                  <div style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px",background:"#f8fafc",borderRadius:12}}>
+                    <span style={{fontSize:"1.3rem"}}>🧹</span>
+                    <div style={{fontWeight:700,fontSize:".88rem"}}>{Object.values(selectedChores).reduce((a,s)=>a+s.size,0)} chores added</div>
+                  </div>
+                )}
+                {goalBanks.filter(b=>b.name&&b.points).length>0&&(
+                  <div style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px",background:"#f8fafc",borderRadius:12}}>
+                    <span style={{fontSize:"1.3rem"}}>🎯</span>
+                    <div style={{fontWeight:700,fontSize:".88rem"}}>{goalBanks.filter(b=>b.name&&b.points).length} savings goal{goalBanks.filter(b=>b.name&&b.points).length!==1?"s":""} created</div>
+                  </div>
+                )}
+                {hasSplitCare===true&&snappedLabel&&(
+                  <div style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px",background:"#f8fafc",borderRadius:12}}>
+                    <span style={{fontSize:"1.3rem"}}>📅</span>
+                    <div style={{fontWeight:700,fontSize:".88rem"}}>Fortnight cycle starting {snappedLabel}</div>
+                  </div>
+                )}
+              </div>
+              <div style={{background:"var(--yellow)",borderRadius:12,padding:12,fontSize:".82rem",fontWeight:700,color:"#92400e",marginBottom:20,lineHeight:1.5}}>
+                💡 Add a second parent, set up the daily checklist, and configure milestone rewards anytime in the parent portal.
+              </div>
+              <button className="btn btn-green" style={{width:"100%",fontSize:"1rem",padding:"14px"}} onClick={finish}>
+                🚀 Launch ChoreChart!
+              </button>
+            </>
+          )}
+
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── HelpTab ──────────────────────────────────────────────────────────────────
 function HelpSection({ icon, title, children, color="#3b82f6" }) {
   const [open, setOpen] = useState(false);
@@ -1495,6 +2001,13 @@ export default function App() {
   const rate = data.settings?.pointValue || 0.5;
   const currency = data.settings?.currency || "AUD";
 
+  // Show setup wizard if first launch (no setupComplete flag and no real children)
+  const needsSetup = !data.settings?.setupComplete && data.children.every(c=>c.id==="c1"||c.id==="c2");
+
+  if(needsSetup) return (
+    <SetupWizard onComplete={newData=>{setData(newData);}}/>
+  );
+
   const doUpdate = fn => {
     let next;
     setData(d=>{next=fn(d);saveData(next);return next;});
@@ -1596,7 +2109,9 @@ export default function App() {
       <div className="screen-select">
         <div style={{textAlign:"center"}}>
           <div style={{fontSize:"3.5rem",marginBottom:6}}>⭐</div>
-          <div className="screen-select-title">ChoreChart</div>
+          <div className="screen-select-title">
+            {data.settings?.familyName ? `${data.settings.familyName}` : "ChoreChart"}
+          </div>
           <div style={{color:"var(--mid)",fontWeight:600,fontSize:".95rem"}}>Earn points · Build good habits · Save for what you love</div>
         </div>
         <div className="profile-cards">
