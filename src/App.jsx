@@ -22,9 +22,7 @@ const defaultData = {
     { id:"ch3", title:"Take Out Trash",     points:2, icon:"🗑️", requiresPhoto:false, recurring:true },
     { id:"ch4", title:"Clean Bedroom",      points:4, icon:"🛏️", requiresPhoto:true,  recurring:true },
   ],
-  // calendar: { slot -> [childId, ...] } marks which kids are "in care" each day of the fortnight
   careSchedule: {},
-  // choreSchedule: [{ choreId, childId, slot }] — chore assigned to a child on a specific fortnight slot
   choreSchedule: [],
   banks: [
     { id:"b1", childId:"c1", name:"Screen Time", icon:"📱", type:"recurring", costPoints:5,  reward:"15 min screen time", savedPoints:0 },
@@ -33,11 +31,22 @@ const defaultData = {
   ],
   choreRequests: [],
   transactions: [],
+  // checklist: shared items + per-child items
+  // { id, label, icon, points, scope: "all"|childId }
+  checklistItems: [
+    { id:"cl1", label:"Brush teeth (morning)", icon:"🦷", points:0, scope:"all" },
+    { id:"cl2", label:"Brush teeth (night)",   icon:"🦷", points:0, scope:"all" },
+    { id:"cl3", label:"Make bed",              icon:"🛏️", points:0, scope:"all" },
+  ],
+  // checklistLog: { "YYYY-MM-DD": { childId: { itemId: true|false } } }
+  checklistLog: {},
+  // milestoneRewards: { childId: { achievementId: points } }
+  milestoneRewards: {},
   settings: {
-    pointValue: 0.50,       // value per point
-    currency: "AUD",        // ISO 4217 currency code
-    calendarStartDay: "Mon", // "Mon" or "Sun"
-    fortnightStart: null,    // ISO date string of the Monday/Sunday that week 1 started
+    pointValue: 0.50,
+    currency: "AUD",
+    calendarStartDay: "Mon",
+    fortnightStart: null,
   },
 };
 
@@ -472,25 +481,28 @@ function AddParentModal({ onSave, onClose }) {
 }
 
 // ─── ApprovalCard ─────────────────────────────────────────────────────────────
-function ApprovalCard({ req, child, chore, rate, onApprove, onReject }) {
+function ApprovalCard({ req, child, chore, rate, currency, onReview, readOnly }) {
   const [showPhoto,setShowPhoto]=useState(false);
   return(
     <div className={`request-card ${req.status}`}>
       <div style={{fontSize:"1.8rem"}}>{chore?.icon||"📋"}</div>
       <div className="request-info">
-        <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600,display:"flex",alignItems:"center",gap:5}}><Av photo={child?.photo} emoji={child?.avatar} size={16}/>{child?.name}</div>
+        <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600,display:"flex",alignItems:"center",gap:5}}>
+          <Av photo={child?.photo} emoji={child?.avatar} size={16}/>{child?.name}
+        </div>
         <div style={{fontWeight:800}}>{chore?.title||"Unknown chore"}</div>
         <div style={{fontSize:".72rem",color:"var(--mid)"}}>{req.time} · <span className={`status status-${req.status}`}>{req.status}</span></div>
+        {req.note&&<div style={{fontSize:".78rem",color:req.status==="approved"?"var(--green)":"var(--red)",fontWeight:700,marginTop:3}}>
+          {req.status==="approved"&&req.bonusPts>0?"⭐ "+req.note:req.status==="rejected"?"💬 "+req.note:""}
+        </div>}
+        {req.bonusPts>0&&<div style={{fontSize:".75rem",color:"var(--amber)",fontWeight:800}}>+{pts(req.bonusPts)} bonus!</div>}
         {req.photo&&<div style={{fontSize:".78rem",color:"#3b82f6",fontWeight:700,cursor:"pointer",marginTop:3}} onClick={()=>setShowPhoto(true)}>📸 View Photo</div>}
       </div>
       <div style={{textAlign:"right"}}>
         <div style={{fontWeight:800,color:"var(--amber)",marginBottom:4}}>{pts(chore?.points||0)}</div>
         <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(chore?.points||0,rate,currency)}</div>
-        {req.status==="pending"&&(
-          <div style={{display:"flex",gap:5,justifyContent:"flex-end",marginTop:6}}>
-            <button className="btn btn-green btn-sm" onClick={onApprove}>✓ Yes</button>
-            <button className="btn btn-red btn-sm" onClick={onReject}>✗ No</button>
-          </div>
+        {!readOnly&&req.status==="pending"&&(
+          <button className="btn btn-blue btn-sm" style={{marginTop:6}} onClick={onReview}>Review</button>
         )}
       </div>
       {showPhoto&&req.photo&&(
@@ -847,6 +859,190 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
   );
 }
 
+// ─── MilestoneRewards ─────────────────────────────────────────────────────────
+function MilestoneRewards({ childId, milestoneRewards, onSave }) {
+  const [open, setOpen] = useState(false);
+  const rewards = milestoneRewards?.[childId] || {};
+  const [vals, setVals] = useState(rewards);
+
+  const save = () => {
+    onSave(childId, vals);
+    setOpen(false);
+  };
+
+  if (!open) return (
+    <button className="btn btn-ghost btn-sm" style={{marginTop:8,width:"100%"}} onClick={()=>{setVals(milestoneRewards?.[childId]||{});setOpen(true);}}>
+      🏅 Set Milestone Rewards
+    </button>
+  );
+
+  return (
+    <div style={{background:"#f8fafc",borderRadius:12,padding:14,marginTop:10}}>
+      <div style={{fontWeight:800,marginBottom:4}}>🏅 Milestone Bonus Points</div>
+      <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600,marginBottom:12,lineHeight:1.5}}>
+        Set bonus points to auto-award when this child unlocks a badge. Leave blank or 0 for no bonus.
+      </div>
+      <div style={{maxHeight:280,overflowY:"auto"}}>
+        {ACHIEVEMENTS.map(a=>(
+          <div key={a.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:"1px solid #f1f5f9"}}>
+            <div style={{fontSize:"1.3rem",width:28,textAlign:"center"}}>{a.icon}</div>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700,fontSize:".85rem"}}>{a.label}</div>
+              <div style={{fontSize:".72rem",color:"var(--mid)",fontWeight:600}}>{a.desc}</div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:4}}>
+              <input type="number" min="0" max="50"
+                style={{width:56,padding:"5px 8px",border:"2px solid #e2e8f0",borderRadius:8,fontFamily:"Nunito,sans-serif",fontWeight:700,fontSize:".85rem",textAlign:"center",outline:"none"}}
+                value={vals[a.id]||""}
+                onChange={e=>setVals(v=>({...v,[a.id]:e.target.value}))}
+                placeholder="0"/>
+              <span style={{fontSize:".72rem",color:"var(--mid)",fontWeight:600}}>pts</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:8,marginTop:12}}>
+        <button className="btn btn-blue btn-sm" onClick={save}>Save</button>
+        <button className="btn btn-ghost btn-sm" onClick={()=>setOpen(false)}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── ChecklistManager (parent) ────────────────────────────────────────────────
+function ChecklistManager({ data, doUpdate, children, rate, currency }) {
+  const [newLabel, setNewLabel] = useState("");
+  const [newIcon, setNewIcon]   = useState("✅");
+  const [newPts, setNewPts]     = useState(0);
+  const [newScope, setNewScope] = useState("all");
+  const icons = ["✅","🦷","🛏️","🚿","👕","🎒","📚","💧","🥗","🏃","🐾","🧴","😴","🙏","🌟"];
+  const today = todayISO();
+
+  const addItem = () => {
+    if (!newLabel.trim()) return;
+    doUpdate(d=>({...d, checklistItems:[...(d.checklistItems||[]), {id:uid(), label:newLabel.trim(), icon:newIcon, points:+newPts||0, scope:newScope}]}));
+    setNewLabel(""); setNewPts(0); setNewScope("all");
+  };
+
+  const removeItem = id => doUpdate(d=>({...d, checklistItems:(d.checklistItems||[]).filter(x=>x.id!==id)}));
+
+  // Get today's log
+  const getLog = (childId, itemId) => data.checklistLog?.[today]?.[childId]?.[itemId] || false;
+  const setLog = (childId, itemId, val) => {
+    doUpdate(d=>{
+      const log = d.checklistLog || {};
+      const dayLog = log[today] || {};
+      const childLog = dayLog[childId] || {};
+      const wasChecked = childLog[itemId] || false;
+      const newChildLog = {...childLog, [itemId]: val};
+      // Award/revoke points if item has points
+      const item = (d.checklistItems||[]).find(x=>x.id===itemId);
+      const pts2 = item?.points || 0;
+      let newChildren = d.children;
+      let newTxs = d.transactions;
+      if (pts2 > 0) {
+        if (val && !wasChecked) {
+          newChildren = d.children.map(c=>c.id===childId?{...c,walletPoints:c.walletPoints+pts2}:c);
+          newTxs = [{id:uid(),childId,type:"earn",points:pts2,label:`✅ ${item.label}`,time:now()},...d.transactions];
+        } else if (!val && wasChecked) {
+          newChildren = d.children.map(c=>c.id===childId?{...c,walletPoints:Math.max(0,c.walletPoints-pts2)}:c);
+        }
+      }
+      return {...d, children:newChildren, transactions:newTxs, checklistLog:{...log,[today]:{...dayLog,[childId]:newChildLog}}};
+    });
+  };
+
+  const items = data.checklistItems || [];
+
+  return (
+    <div>
+      <div className="section-title">✅ Daily Checklist</div>
+
+      {/* Today overview per child */}
+      <div style={{marginBottom:20}}>
+        <div style={{fontWeight:700,fontSize:".85rem",color:"var(--mid)",marginBottom:10}}>Today — {new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"})}</div>
+        {children.map(child=>{
+          const childItems = items.filter(x=>x.scope==="all"||x.scope===child.id);
+          const done = childItems.filter(x=>getLog(child.id,x.id)).length;
+          const pct = childItems.length ? Math.round((done/childItems.length)*100) : 0;
+          return (
+            <div key={child.id} className="card" style={{marginBottom:10}}>
+              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+                <Av photo={child.photo} emoji={child.avatar} size={36}/>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:800}}>{child.name}</div>
+                  <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>{done}/{childItems.length} done · {pct}%</div>
+                </div>
+                <div style={{fontWeight:900,fontSize:"1.1rem",color:pct===100?"var(--green)":"var(--mid)"}}>{pct===100?"🌟":""}{pct}%</div>
+              </div>
+              <div style={{height:6,background:"#e2e8f0",borderRadius:99,marginBottom:10,overflow:"hidden"}}>
+                <div style={{height:"100%",background:pct===100?"var(--green)":"var(--blue)",borderRadius:99,width:`${pct}%`,transition:"width .3s"}}/>
+              </div>
+              {childItems.map(item=>(
+                <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 0",borderBottom:"1px solid #f8fafc"}}>
+                  <div style={{fontSize:"1.2rem"}}>{item.icon}</div>
+                  <div style={{flex:1,fontWeight:600,fontSize:".85rem",color:getLog(child.id,item.id)?"var(--mid)":"var(--dark)",textDecoration:getLog(child.id,item.id)?"line-through":"none"}}>{item.label}</div>
+                  {item.points>0&&<span style={{fontSize:".72rem",fontWeight:700,color:"var(--amber)"}}>+{item.points}pts</span>}
+                  <div onClick={()=>setLog(child.id,item.id,!getLog(child.id,item.id))}
+                    style={{width:26,height:26,borderRadius:8,border:`2px solid ${getLog(child.id,item.id)?"var(--green)":"#e2e8f0"}`,background:getLog(child.id,item.id)?"var(--green)":"white",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,color:"white",fontWeight:900,fontSize:".85rem"}}>
+                    {getLog(child.id,item.id)?"✓":""}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Manage items */}
+      <div className="section-title" style={{fontSize:"1.1rem"}}>⚙️ Manage Checklist Items</div>
+      <div className="card" style={{marginBottom:14}}>
+        <div style={{fontWeight:800,marginBottom:10,fontSize:".9rem"}}>Add New Item</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+          {icons.map(ic=>(
+            <div key={ic} onClick={()=>setNewIcon(ic)}
+              style={{fontSize:"1.4rem",cursor:"pointer",padding:5,borderRadius:8,background:newIcon===ic?"#dbeafe":"#f1f5f9",border:newIcon===ic?"2px solid #3b82f6":"2px solid transparent"}}>
+              {ic}
+            </div>
+          ))}
+        </div>
+        <div className="form-group">
+          <input className="form-input" placeholder="e.g. Brush teeth" value={newLabel} onChange={e=>setNewLabel(e.target.value)}/>
+        </div>
+        <div className="form-row">
+          <div className="form-group mb-0">
+            <label className="form-label">Applies to</label>
+            <select className="form-input" value={newScope} onChange={e=>setNewScope(e.target.value)}>
+              <option value="all">All children</option>
+              {children.map(c=><option key={c.id} value={c.id}>{c.name} only</option>)}
+            </select>
+          </div>
+          <div className="form-group mb-0">
+            <label className="form-label">Points (0 = no reward)</label>
+            <input className="form-input" type="number" min="0" max="20" value={newPts} onChange={e=>setNewPts(e.target.value)}/>
+          </div>
+        </div>
+        <button className="btn btn-teal" style={{marginTop:10,width:"100%"}} onClick={addItem}>+ Add Item</button>
+      </div>
+
+      {items.length===0&&<div className="empty"><div className="empty-icon">✅</div><div className="empty-text">No checklist items yet</div></div>}
+      {items.map(item=>(
+        <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"white",borderRadius:12,boxShadow:"var(--shadow)",marginBottom:8}}>
+          <div style={{fontSize:"1.4rem"}}>{item.icon}</div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700,fontSize:".88rem"}}>{item.label}</div>
+            <div style={{fontSize:".72rem",color:"var(--mid)",fontWeight:600}}>
+              {item.scope==="all"?"All children":children.find(c=>c.id===item.scope)?.name+" only"}
+              {item.points>0?` · +${item.points} pts`:" · No reward"}
+            </div>
+          </div>
+          <button className="btn btn-red btn-sm" onClick={()=>removeItem(item.id)}>✕</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── HelpTab ──────────────────────────────────────────────────────────────────
 function HelpSection({ icon, title, children, color="#3b82f6" }) {
   const [open, setOpen] = useState(false);
@@ -1051,6 +1247,232 @@ function HelpTab() {
   );
 }
 
+// ─── Achievements definition ──────────────────────────────────────────────────
+const ACHIEVEMENTS = [
+  { id:"first_chore",    icon:"⭐", label:"First Step",      desc:"Complete your first chore",              check:(txs)=>txs.filter(t=>t.type==="earn").length>=1 },
+  { id:"five_chores",    icon:"🔥", label:"On Fire",         desc:"Complete 5 chores",                      check:(txs)=>txs.filter(t=>t.type==="earn").length>=5 },
+  { id:"ten_chores",     icon:"💪", label:"Hard Worker",     desc:"Complete 10 chores",                     check:(txs)=>txs.filter(t=>t.type==="earn").length>=10 },
+  { id:"twenty_chores",  icon:"🏆", label:"Champion",        desc:"Complete 20 chores",                     check:(txs)=>txs.filter(t=>t.type==="earn").length>=20 },
+  { id:"first_save",     icon:"🏦", label:"Saver",           desc:"Distribute points to a bank for the first time", check:(txs)=>txs.filter(t=>t.type==="save").length>=1 },
+  { id:"first_redeem",   icon:"🎉", label:"Treat Yourself",  desc:"Redeem your first reward",               check:(txs)=>txs.filter(t=>t.type==="redeem").length>=1 },
+  { id:"first_bonus",    icon:"🌟", label:"Above & Beyond",  desc:"Earn a bonus for exceptional effort",    check:(txs)=>txs.filter(t=>t.type==="bonus").length>=1 },
+  { id:"three_bonus",    icon:"💎", label:"Star Performer",  desc:"Earn 3 bonuses",                         check:(txs)=>txs.filter(t=>t.type==="bonus").length>=3 },
+  { id:"earn_10pts",     icon:"💰", label:"Pocket Money",    desc:"Earn 10 points total",                   check:(txs)=>txs.filter(t=>t.type==="earn"||t.type==="bonus").reduce((a,t)=>a+t.points,0)>=10 },
+  { id:"earn_50pts",     icon:"💵", label:"Big Earner",      desc:"Earn 50 points total",                   check:(txs)=>txs.filter(t=>t.type==="earn"||t.type==="bonus").reduce((a,t)=>a+t.points,0)>=50 },
+  { id:"earn_100pts",    icon:"🤑", label:"Money Maker",     desc:"Earn 100 points total",                  check:(txs)=>txs.filter(t=>t.type==="earn"||t.type==="bonus").reduce((a,t)=>a+t.points,0)>=100 },
+  { id:"streak_3",       icon:"📅", label:"3-Day Streak",    desc:"Complete chores 3 days in a row",        check:(_,streak)=>streak>=3 },
+  { id:"streak_7",       icon:"🗓️", label:"Week Warrior",    desc:"Complete chores 7 days in a row",        check:(_,streak)=>streak>=7 },
+  { id:"gift_received",  icon:"🎁", label:"Lucky Day",       desc:"Receive a gift from a parent",           check:(txs)=>txs.filter(t=>t.type==="gift").length>=1 },
+];
+
+function checkAchievements(data, childId) {
+  const childTxs = data.transactions.filter(t=>t.childId===childId);
+  const streak = calcStreak(data, childId);
+  const child = data.children.find(c=>c.id===childId);
+  if (!child) return data;
+  const existing = child.achievements || [];
+  const newlyUnlocked = ACHIEVEMENTS.filter(a =>
+    !existing.includes(a.id) && a.check(childTxs, streak)
+  ).map(a=>a.id);
+  if (newlyUnlocked.length===0) return data;
+
+  // Award milestone bonus points for any newly unlocked achievements
+  const milestones = data.milestoneRewards?.[childId] || {};
+  const bonusTxs = newlyUnlocked
+    .filter(id => milestones[id] && +milestones[id] > 0)
+    .map(id => {
+      const a = ACHIEVEMENTS.find(x=>x.id===id);
+      return { id:uid(), childId, type:"bonus", points:+milestones[id], label:`${a?.icon} Milestone: ${a?.label}!`, time:now() };
+    });
+  const bonusPtsTotal = bonusTxs.reduce((a,t)=>a+t.points, 0);
+
+  return {
+    ...data,
+    children: data.children.map(c => c.id===childId ? {
+      ...c,
+      achievements: [...existing, ...newlyUnlocked],
+      walletPoints: c.walletPoints + bonusPtsTotal,
+    } : c),
+    transactions: bonusTxs.length > 0 ? [...bonusTxs, ...data.transactions] : data.transactions,
+  };
+}
+
+// Today as YYYY-MM-DD in local time
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function calcStreak(data, childId) {
+  const earnTxs = data.transactions.filter(t=>t.childId===childId && t.type==="earn");
+  if (earnTxs.length===0) return 0;
+
+  // Build set of dates child earned points (local date strings "DD/MM/YYYY")
+  const earnDateSet = new Set(earnTxs.map(t=>{
+    try { return t.time.split(",")[0]; } catch { return null; }
+  }).filter(Boolean));
+
+  // Build set of "away" dates from careSchedule (dates where child NOT in care)
+  // Convert fortnight slots to real dates and check if child is absent
+  const awayDates = new Set();
+  if (data.settings?.fortnightStart) {
+    const anchor = parseLocalDate(data.settings.fortnightStart);
+    const snapped = snapToStartDay(anchor, data.settings.calendarStartDay || "Mon");
+    // Check last 60 days
+    for (let i=0; i<60; i++) {
+      const d = new Date(snapped);
+      d.setDate(snapped.getDate() + i);
+      const diffDays = Math.floor((d - snapped) / 86400000);
+      const week = Math.floor((diffDays % 14) / 7);
+      const day  = diffDays % 7;
+      const sk   = slotKey(week, day);
+      const careKids = data.careSchedule?.[sk] || [];
+      // If calendar is set up and child is NOT in careKids for that slot, mark as away
+      if (Object.keys(data.careSchedule||{}).length > 0 && !careKids.includes(childId)) {
+        const dateStr = `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
+        awayDates.add(dateStr);
+      }
+    }
+  }
+
+  // Walk backwards from today, counting consecutive "active" days
+  // Active = either earned points OR was away (away days are skipped, not broken)
+  let streak = 0;
+  let broken = false;
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  for (let i=0; i<=60 && !broken; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const dateStr = `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
+
+    if (awayDates.has(dateStr)) continue; // skip away days entirely
+    if (earnDateSet.has(dateStr)) { streak++; continue; }
+    if (i === 0) continue; // today hasn't ended yet, don't break on today
+    broken = true;
+  }
+
+  return streak;
+}
+
+// ─── ApprovalModal ────────────────────────────────────────────────────────────
+function ApprovalModal({ req, child, chore, rate, currency, onApprove, onReject, onClose }) {
+  const [mode, setMode]       = useState("approve"); // "approve" | "reject"
+  const [bonusPts, setBonusPts] = useState(0);
+  const [note, setNote]       = useState("");
+
+  const chorePts = chore?.points || 0;
+  const totalPts = chorePts + (+bonusPts||0);
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal">
+        {/* Header */}
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18}}>
+          <div style={{fontSize:"2.2rem"}}>{chore?.icon||"📋"}</div>
+          <div>
+            <div style={{fontWeight:800,fontSize:"1.05rem"}}>{chore?.title}</div>
+            <div style={{display:"flex",alignItems:"center",gap:6,fontSize:".82rem",color:"var(--mid)",fontWeight:600}}>
+              <Av photo={child?.photo} emoji={child?.avatar} size={18}/>{child?.name}
+            </div>
+          </div>
+          {req.photo&&(
+            <a href={req.photo} target="_blank" rel="noreferrer"
+              style={{marginLeft:"auto",fontSize:".78rem",color:"var(--blue)",fontWeight:700}}>📸 View Photo</a>
+          )}
+        </div>
+
+        {/* Mode toggle */}
+        <div style={{display:"flex",gap:8,marginBottom:18}}>
+          <button className={`btn ${mode==="approve"?"btn-green":"btn-ghost"}`} style={{flex:1}}
+            onClick={()=>{setMode("approve");setNote("");}}>✓ Approve</button>
+          <button className={`btn ${mode==="reject"?"btn-red":"btn-ghost"}`} style={{flex:1}}
+            onClick={()=>{setMode("reject");setBonusPts(0);}}>✗ Reject</button>
+        </div>
+
+        {/* Approve panel */}
+        {mode==="approve"&&(
+          <>
+            <div style={{background:"var(--mint)",borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+              <div style={{fontWeight:700,fontSize:".82rem",color:"#065f46",marginBottom:4}}>Base reward</div>
+              <div style={{fontWeight:900,fontSize:"1.1rem",color:"var(--green)"}}>
+                {pts(chorePts)} · {money(chorePts,rate,currency)}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">⭐ Bonus points — did they go above and beyond?</label>
+              <div style={{display:"flex",gap:8,marginBottom:6}}>
+                {[0,1,2,3,5].map(n=>(
+                  <div key={n} onClick={()=>setBonusPts(n)}
+                    style={{flex:1,textAlign:"center",padding:"8px 4px",borderRadius:10,cursor:"pointer",fontWeight:800,fontSize:".9rem",
+                      background:bonusPts===n?"var(--amber)":"#f1f5f9",
+                      color:bonusPts===n?"white":"var(--dark)",
+                      border:bonusPts===n?"2px solid var(--amber)":"2px solid transparent"}}>
+                    {n===0?"None":`+${n}`}
+                  </div>
+                ))}
+              </div>
+              <input className="form-input" type="number" min="0" max="20" placeholder="Or enter custom bonus..."
+                value={bonusPts||""} onChange={e=>setBonusPts(+e.target.value)}/>
+            </div>
+
+            {+bonusPts>0&&(
+              <div className="form-group">
+                <label className="form-label">Note for {child?.name} (optional)</label>
+                <input className="form-input" placeholder={`e.g. "Amazing effort today!"`}
+                  value={note} onChange={e=>setNote(e.target.value)}/>
+              </div>
+            )}
+
+            {+bonusPts>0&&(
+              <div style={{background:"var(--yellow)",borderRadius:12,padding:"10px 14px",marginBottom:14}}>
+                <div style={{fontWeight:700,fontSize:".82rem",color:"#92400e"}}>Total to award</div>
+                <div style={{fontWeight:900,fontSize:"1.2rem",color:"#b45309"}}>
+                  {pts(totalPts)} · {money(totalPts,rate,currency)}
+                  <span style={{fontSize:".8rem",fontWeight:700,marginLeft:8,color:"#92400e"}}>
+                    ({pts(chorePts)} + {pts(+bonusPts)} bonus)
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn btn-green" style={{flex:1}}
+                onClick={()=>{onApprove(bonusPts,note);onClose();}}>
+                ✓ Approve {+bonusPts>0?`& Award ${pts(totalPts)}`:""}
+              </button>
+              <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+            </div>
+          </>
+        )}
+
+        {/* Reject panel */}
+        {mode==="reject"&&(
+          <>
+            <div style={{background:"#fee2e2",borderRadius:12,padding:"10px 14px",marginBottom:14,fontSize:".85rem",fontWeight:700,color:"#991b1b"}}>
+              No points will be awarded. {child?.name} can resubmit after fixing the issue.
+            </div>
+            <div className="form-group">
+              <label className="form-label">Leave a note for {child?.name} (recommended)</label>
+              <input className="form-input" placeholder={`e.g. "Dishes still dirty, try again!"`}
+                value={note} onChange={e=>setNote(e.target.value)}/>
+              <div style={{fontSize:".75rem",color:"var(--mid)",fontWeight:600,marginTop:4}}>
+                This will show in their history so they know what to fix.
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn btn-red" style={{flex:1}}
+                onClick={()=>{onReject(note);onClose();}}>✗ Reject Chore</button>
+              <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [data,setData]             = useState(loadData);
@@ -1067,7 +1489,8 @@ export default function App() {
   const [giftChild,setGiftChild]   = useState(null);
   const [giftPts,setGiftPts]       = useState("");
   const [giftNote,setGiftNote]     = useState("");
-  const [redeemNudge,setRedeemNudge] = useState(null); // bankId pending confirmation
+  const [redeemNudge,setRedeemNudge] = useState(null);
+  const [approvalModal,setApprovalModal] = useState(null); // { reqId, mode: 'approve'|'reject' }
 
   const rate = data.settings?.pointValue || 0.5;
   const currency = data.settings?.currency || "AUD";
@@ -1111,13 +1534,21 @@ export default function App() {
     setModal(null);setClaimChore(null);setClaimPhoto(null);
   };
 
-  const handleApprove=reqId=>doUpdate(d=>{
+  const handleApprove=(reqId, bonusPts=0, note="")=>doUpdate(d=>{
     const req=d.choreRequests.find(r=>r.id===reqId);
     const chore=d.chores.find(c=>c.id===req?.choreId);
     if(!req||!chore)return d;
-    return{...d,choreRequests:d.choreRequests.map(r=>r.id===reqId?{...r,status:"approved"}:r),children:d.children.map(c=>c.id===req.childId?{...c,walletPoints:c.walletPoints+chore.points}:c),transactions:[{id:uid(),childId:req.childId,type:"earn",points:chore.points,label:chore.title,time:now()},...d.transactions]};
+    const total=chore.points+(+bonusPts||0);
+    const txs=[{id:uid(),childId:req.childId,type:"earn",points:chore.points,label:chore.title,choreId:chore.id,time:now()}];
+    if(+bonusPts>0) txs.push({id:uid(),childId:req.childId,type:"bonus",points:+bonusPts,label:`⭐ Bonus: ${note||"Great effort!"}`,time:now()});
+    const newData={...d,
+      choreRequests:d.choreRequests.map(r=>r.id===reqId?{...r,status:"approved",note,bonusPts:+bonusPts||0}:r),
+      children:d.children.map(c=>c.id===req.childId?{...c,walletPoints:c.walletPoints+total}:c),
+      transactions:[...txs,...d.transactions]
+    };
+    return checkAchievements(newData, req.childId);
   });
-  const handleReject=reqId=>doUpdate(d=>({...d,choreRequests:d.choreRequests.map(r=>r.id===reqId?{...r,status:"rejected"}:r)}));
+  const handleReject=(reqId,note="")=>doUpdate(d=>({...d,choreRequests:d.choreRequests.map(r=>r.id===reqId?{...r,status:"rejected",note}:r)}));
 
   const handleDistribute=()=>{
     const child=data.children.find(c=>c.id===activeUser.id);
@@ -1206,13 +1637,37 @@ export default function App() {
             </div>
           </nav>
           <div className="main">
-            <div className="wallet-card">
-              <div className="wallet-label">My Wallet</div>
-              <div className="wallet-pts">{child.walletPoints} <span style={{fontSize:"1.4rem"}}>pts</span></div>
-              <div className="wallet-money">{money(child.walletPoints,rate,currency)} value · {CURRENCIES.find(c=>c.code===currency)?.symbol||"$"}{rate.toFixed(2)} per point</div>
-            </div>
+            {(()=>{
+              const streak=calcStreak(data,child.id);
+              const earned=data.transactions.filter(t=>t.childId===child.id&&(t.type==="earn"||t.type==="bonus")).reduce((a,t)=>a+t.points,0);
+              const badges=(child.achievements||[]);
+              return(
+                <div className="wallet-card">
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <div>
+                      <div className="wallet-label">My Wallet</div>
+                      <div className="wallet-pts">{child.walletPoints} <span style={{fontSize:"1.4rem"}}>pts</span></div>
+                      <div className="wallet-money">{money(child.walletPoints,rate,currency)} value · {CURRENCIES.find(c=>c.code===currency)?.symbol||"$"}{rate.toFixed(2)} per point</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      {streak>0&&(
+                        <div style={{background:"rgba(255,255,255,.2)",borderRadius:12,padding:"6px 12px",marginBottom:6}}>
+                          <div style={{fontWeight:900,fontSize:"1.1rem"}}>🔥 {streak}</div>
+                          <div style={{fontSize:".72rem",opacity:.88,fontWeight:700}}>day streak</div>
+                        </div>
+                      )}
+                      {badges.length>0&&(
+                        <div style={{background:"rgba(255,255,255,.15)",borderRadius:12,padding:"5px 10px",fontSize:"1.1rem"}}>
+                          {badges.slice(-4).map(id=>{const a=ACHIEVEMENTS.find(x=>x.id===id);return a?<span key={id}>{a.icon}</span>:null;})}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
             <div className="tabs">
-              {[["chores","🧹 Chores"],["calendar","📅 Schedule"],["wallet","💰 Distribute"],["banks","🏦 Banks"],["history","📋 History"]].map(([t,l])=>(
+              {[["chores","🧹 Chores"],["calendar","📅 Schedule"],["checklist","✅ Daily"],["wallet","💰 Distribute"],["banks","🏦 Banks"],["history","📋 History"],["badges","🏅 Badges"]].map(([t,l])=>(
                 <button key={t} className={`tab ${childTab===t?"active":""}`} onClick={()=>setChildTab(t)}>{l}</button>
               ))}
             </div>
@@ -1248,6 +1703,103 @@ export default function App() {
             {childTab==="calendar"&&(
               <CalendarView data={data} doUpdate={doUpdate} isParent={false} activeChildId={child.id}/>
             )}
+
+            {/* DAILY CHECKLIST */}
+            {childTab==="checklist"&&(()=>{
+              const today = todayISO();
+              const items = (data.checklistItems||[]).filter(x=>x.scope==="all"||x.scope===child.id);
+              const getLog = itemId => data.checklistLog?.[today]?.[child.id]?.[itemId]||false;
+              const doneCount = items.filter(x=>getLog(x.id)).length;
+              const pct = items.length ? Math.round((doneCount/items.length)*100) : 0;
+              const allDone = items.length > 0 && doneCount === items.length;
+
+              const toggleItem = (itemId, val) => {
+                doUpdate(d=>{
+                  const log = d.checklistLog||{};
+                  const dayLog = log[today]||{};
+                  const childLog = dayLog[child.id]||{};
+                  const wasChecked = childLog[itemId]||false;
+                  const item = (d.checklistItems||[]).find(x=>x.id===itemId);
+                  const pts2 = item?.points||0;
+                  let newChildren = d.children;
+                  let newTxs = d.transactions;
+                  if (pts2>0) {
+                    if (val&&!wasChecked) {
+                      newChildren = d.children.map(c=>c.id===child.id?{...c,walletPoints:c.walletPoints+pts2}:c);
+                      newTxs = [{id:uid(),childId:child.id,type:"earn",points:pts2,label:`✅ ${item.label}`,time:now()},...d.transactions];
+                    } else if (!val&&wasChecked) {
+                      newChildren = d.children.map(c=>c.id===child.id?{...c,walletPoints:Math.max(0,c.walletPoints-pts2)}:c);
+                    }
+                  }
+                  return {...d,children:newChildren,transactions:newTxs,
+                    checklistLog:{...log,[today]:{...dayLog,[child.id]:{...childLog,[itemId]:val}}}};
+                });
+              };
+
+              return(
+                <>
+                  <div className="section-title">✅ Daily Checklist</div>
+
+                  {/* Progress header */}
+                  <div style={{background:allDone?"linear-gradient(135deg,#10b981,#059669)":"white",borderRadius:16,padding:18,boxShadow:"var(--shadow)",marginBottom:16,color:allDone?"white":"var(--dark)",transition:"all .3s"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <div>
+                        <div style={{fontWeight:800,fontSize:"1rem"}}>{allDone?"🌟 All done today!":"Today's Essentials"}</div>
+                        <div style={{fontSize:".82rem",opacity:.85,fontWeight:600,marginTop:2}}>
+                          {new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"})}
+                        </div>
+                      </div>
+                      <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"2rem",lineHeight:1}}>{doneCount}/{items.length}</div>
+                    </div>
+                    <div style={{height:10,background:allDone?"rgba(255,255,255,.3)":"#e2e8f0",borderRadius:99,overflow:"hidden"}}>
+                      <div style={{height:"100%",background:allDone?"white":"var(--green)",borderRadius:99,width:`${pct}%`,transition:"width .4s"}}/>
+                    </div>
+                    {allDone&&<div style={{marginTop:10,fontSize:".85rem",fontWeight:700,opacity:.9}}>Amazing work {child.name}! Keep it up 💪</div>}
+                  </div>
+
+                  {items.length===0&&(
+                    <div className="empty">
+                      <div className="empty-icon">✅</div>
+                      <div className="empty-text">No checklist items yet</div>
+                      <div className="empty-sub">Ask a parent to add your daily essentials!</div>
+                    </div>
+                  )}
+
+                  {/* Checklist items */}
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    {items.map(item=>{
+                      const done = getLog(item.id);
+                      return(
+                        <div key={item.id}
+                          onClick={()=>toggleItem(item.id,!done)}
+                          style={{
+                            display:"flex",alignItems:"center",gap:14,padding:"14px 16px",
+                            background:"white",borderRadius:14,boxShadow:done?"none":"var(--shadow)",
+                            border:`2px solid ${done?"var(--green)":"#e2e8f0"}`,
+                            opacity:done?0.75:1,cursor:"pointer",transition:"all .2s",
+                            background:done?"var(--mint)":"white"
+                          }}>
+                          <div style={{fontSize:"1.8rem"}}>{item.icon}</div>
+                          <div style={{flex:1}}>
+                            <div style={{fontWeight:700,fontSize:".95rem",textDecoration:done?"line-through":"none",color:done?"var(--mid)":"var(--dark)"}}>{item.label}</div>
+                            {item.points>0&&<div style={{fontSize:".75rem",color:"var(--amber)",fontWeight:800,marginTop:2}}>+{item.points} pts on completion</div>}
+                          </div>
+                          <div style={{width:32,height:32,borderRadius:"50%",border:`2px solid ${done?"var(--green)":"#e2e8f0"}`,background:done?"var(--green)":"white",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:"1rem",flexShrink:0,transition:"all .2s"}}>
+                            {done?"✓":""}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {items.length>0&&!allDone&&(
+                    <div style={{textAlign:"center",marginTop:16,fontSize:".85rem",color:"var(--mid)",fontWeight:600}}>
+                      {items.length-doneCount} item{items.length-doneCount!==1?"s":""} left — you can do it! 💪
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             {/* DISTRIBUTE */}
             {childTab==="wallet"&&(
@@ -1338,60 +1890,185 @@ export default function App() {
             )}
 
             {/* HISTORY */}
-            {childTab==="history"&&(
-              <>
-                <div className="section-title">📋 History</div>
-                {(() => {
-                  // Merge all transaction types + chore requests into one sorted timeline
-                  const redeemTxs = data.transactions.filter(t=>t.childId===child.id&&t.type==="redeem");
-                  const giftTxs   = data.transactions.filter(t=>t.childId===child.id&&t.type==="gift");
-                  const allEmpty  = myHistory.length===0 && redeemTxs.length===0 && giftTxs.length===0;
-                  if(allEmpty) return <div className="empty"><div className="empty-icon">📋</div><div className="empty-text">No history yet</div><div className="empty-sub">Complete some chores to get started!</div></div>;
-                  return null;
-                })()}
-                {/* Gifts */}
-                {data.transactions.filter(t=>t.childId===child.id&&t.type==="gift").map(t=>(
-                  <div key={t.id} className="request-card approved">
-                    <div style={{fontSize:"1.8rem"}}>🎁</div>
-                    <div className="request-info"><div style={{fontWeight:800}}>{t.label}</div><div style={{fontSize:".72rem",color:"var(--mid)"}}>{t.time}</div></div>
-                    <div style={{textAlign:"right"}}>
-                      <div style={{fontWeight:800,color:"var(--green)"}}>+{pts(t.points)}</div>
-                      <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(t.points,rate,currency)}</div>
+            {childTab==="history"&&(()=>{
+              const allTxs = data.transactions.filter(t=>t.childId===child.id);
+              const earnPts  = allTxs.filter(t=>t.type==="earn" ||t.type==="bonus").reduce((a,t)=>a+t.points,0);
+              const spendPts = allTxs.filter(t=>t.type==="redeem").reduce((a,t)=>a+Math.abs(t.points),0);
+              const savePts  = allTxs.filter(t=>t.type==="save").reduce((a,t)=>a+Math.abs(t.points),0);
+              const giftPts2 = allTxs.filter(t=>t.type==="gift").reduce((a,t)=>a+t.points,0);
+              const grandTotal = earnPts + giftPts2;
+              const isEmpty = allTxs.length===0 && myHistory.length===0;
+              return (
+                <>
+                  <div className="section-title">📋 History</div>
+
+                  {/* Spending summary card */}
+                  {grandTotal>0&&(
+                    <div style={{background:"white",borderRadius:16,padding:18,boxShadow:"var(--shadow)",marginBottom:16}}>
+                      <div style={{fontWeight:800,marginBottom:12,fontSize:".95rem"}}>💰 Money Summary</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+                        {[
+                          {label:"Total Earned",val:earnPts,col:"var(--green)",icon:"⭐"},
+                          {label:"Gifts Received",val:giftPts2,col:"var(--amber)",icon:"🎁"},
+                          {label:"Spent on Rewards",val:spendPts,col:"var(--purple)",icon:"🎉"},
+                          {label:"Moved to Banks",val:savePts,col:"var(--blue)",icon:"🏦"},
+                        ].map(({label,val,col,icon})=>(
+                          <div key={label} style={{background:"#f8fafc",borderRadius:12,padding:"10px 12px"}}>
+                            <div style={{fontSize:".72rem",color:"var(--mid)",fontWeight:700,marginBottom:3}}>{icon} {label}</div>
+                            <div style={{fontWeight:900,color:col,fontSize:"1rem"}}>{money(val,rate,currency)}</div>
+                            <div style={{fontSize:".72rem",color:"var(--mid)",fontWeight:600}}>{pts(val)}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Bar showing earn vs spend ratio */}
+                      {spendPts>0&&grandTotal>0&&(
+                        <div>
+                          <div style={{display:"flex",justifyContent:"space-between",fontSize:".75rem",fontWeight:700,color:"var(--mid)",marginBottom:4}}>
+                            <span>Saved / banked</span><span>Spent on rewards</span>
+                          </div>
+                          <div style={{height:10,background:"#e2e8f0",borderRadius:99,overflow:"hidden",display:"flex"}}>
+                            <div style={{width:`${Math.round(((grandTotal-spendPts)/grandTotal)*100)}%`,background:"var(--green)",borderRadius:"99px 0 0 99px",transition:"width .4s"}}/>
+                            <div style={{flex:1,background:"var(--purple)",borderRadius:"0 99px 99px 0"}}/>
+                          </div>
+                          <div style={{fontSize:".72rem",color:"var(--mid)",fontWeight:600,marginTop:4,textAlign:"center"}}>
+                            {Math.round(((grandTotal-spendPts)/grandTotal)*100)}% saved · {Math.round((spendPts/grandTotal)*100)}% spent on rewards
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
-                {/* Redemptions */}
-                {data.transactions.filter(t=>t.childId===child.id&&t.type==="redeem").map(t=>(
-                  <div key={t.id} className="request-card" style={{borderLeftColor:"var(--purple)"}}>
-                    <div style={{fontSize:"1.8rem"}}>{t.bankIcon||"🎉"}</div>
-                    <div className="request-info">
-                      <div style={{fontWeight:800}}>{t.label}</div>
-                      <div style={{fontSize:".72rem",color:"var(--mid)"}}>{t.time}</div>
-                      <span className="tag" style={{background:"var(--lavender)",color:"var(--purple)",marginTop:3,display:"inline-block"}}>Redeemed</span>
-                    </div>
-                    <div style={{textAlign:"right"}}>
-                      <div style={{fontWeight:800,color:"var(--purple)"}}>{pts(Math.abs(t.points))}</div>
-                      <div style={{fontSize:".75rem",color:"var(--purple)",fontWeight:700}}>{money(Math.abs(t.points),rate,currency)}</div>
-                    </div>
-                  </div>
-                ))}
-                {/* Chore requests */}
-                {myHistory.map(req=>{
-                  const chore=data.chores.find(c=>c.id===req.choreId);
-                  return(
-                    <div key={req.id} className={`request-card ${req.status}`}>
-                      <div style={{fontSize:"1.8rem"}}>{chore?.icon||"📋"}</div>
-                      <div className="request-info"><div style={{fontWeight:800}}>{chore?.title||"Chore"}</div><div style={{fontSize:".72rem",color:"var(--mid)"}}>{req.time}</div></div>
+                  )}
+
+                  {isEmpty&&<div className="empty"><div className="empty-icon">📋</div><div className="empty-text">No history yet</div><div className="empty-sub">Complete some chores to get started!</div></div>}
+
+                  {/* Bonus transactions */}
+                  {allTxs.filter(t=>t.type==="bonus").map(t=>(
+                    <div key={t.id} className="request-card" style={{borderLeftColor:"var(--amber)"}}>
+                      <div style={{fontSize:"1.8rem"}}>⭐</div>
+                      <div className="request-info">
+                        <div style={{fontWeight:800}}>{t.label}</div>
+                        <div style={{fontSize:".72rem",color:"var(--mid)"}}>{t.time}</div>
+                        <span className="tag" style={{background:"var(--yellow)",color:"#92400e",marginTop:3,display:"inline-block"}}>Bonus</span>
+                      </div>
                       <div style={{textAlign:"right"}}>
-                        <div style={{fontWeight:800,color:"var(--amber)"}}>+{pts(chore?.points||0)}</div>
-                        <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(chore?.points||0,rate,currency)}</div>
-                        <span className={`status status-${req.status}`}>{req.status}</span>
+                        <div style={{fontWeight:800,color:"var(--amber)"}}>+{pts(t.points)}</div>
+                        <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(t.points,rate,currency)}</div>
                       </div>
                     </div>
-                  );
-                })}
-              </>
-            )}
+                  ))}
+                  {/* Gifts */}
+                  {allTxs.filter(t=>t.type==="gift").map(t=>(
+                    <div key={t.id} className="request-card approved">
+                      <div style={{fontSize:"1.8rem"}}>🎁</div>
+                      <div className="request-info"><div style={{fontWeight:800}}>{t.label}</div><div style={{fontSize:".72rem",color:"var(--mid)"}}>{t.time}</div></div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontWeight:800,color:"var(--green)"}}>+{pts(t.points)}</div>
+                        <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(t.points,rate,currency)}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {/* Redemptions */}
+                  {allTxs.filter(t=>t.type==="redeem").map(t=>(
+                    <div key={t.id} className="request-card" style={{borderLeftColor:"var(--purple)"}}>
+                      <div style={{fontSize:"1.8rem"}}>{t.bankIcon||"🎉"}</div>
+                      <div className="request-info">
+                        <div style={{fontWeight:800}}>{t.label}</div>
+                        <div style={{fontSize:".72rem",color:"var(--mid)"}}>{t.time}</div>
+                        <span className="tag" style={{background:"var(--lavender)",color:"var(--purple)",marginTop:3,display:"inline-block"}}>Redeemed</span>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontWeight:800,color:"var(--purple)"}}>-{pts(Math.abs(t.points))}</div>
+                        <div style={{fontSize:".75rem",color:"var(--purple)",fontWeight:700}}>{money(Math.abs(t.points),rate,currency)}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {/* Chore requests */}
+                  {myHistory.map(req=>{
+                    const chore=data.chores.find(c=>c.id===req.choreId);
+                    return(
+                      <div key={req.id} className={`request-card ${req.status}`}>
+                        <div style={{fontSize:"1.8rem"}}>{chore?.icon||"📋"}</div>
+                        <div className="request-info">
+                          <div style={{fontWeight:800}}>{chore?.title||"Chore"}</div>
+                          <div style={{fontSize:".72rem",color:"var(--mid)"}}>{req.time}</div>
+                          {req.note&&<div style={{fontSize:".75rem",fontWeight:700,marginTop:3,color:req.status==="rejected"?"var(--red)":"var(--green)"}}>
+                            💬 {req.note}
+                          </div>}
+                          {req.bonusPts>0&&<div style={{fontSize:".75rem",color:"var(--amber)",fontWeight:800}}>+{pts(req.bonusPts)} bonus!</div>}
+                        </div>
+                        <div style={{textAlign:"right"}}>
+                          <div style={{fontWeight:800,color:"var(--amber)"}}>+{pts(chore?.points||0)}</div>
+                          <div style={{fontSize:".75rem",color:"var(--green)",fontWeight:700}}>{money(chore?.points||0,rate,currency)}</div>
+                          <span className={`status status-${req.status}`}>{req.status}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              );
+            })()}
+
+            {/* BADGES */}
+            {childTab==="badges"&&(()=>{
+              const unlocked = child.achievements||[];
+              const streak = calcStreak(data, child.id);
+              const earnTxs = data.transactions.filter(t=>t.childId===child.id);
+              return(
+                <>
+                  <div className="section-title">🏅 Achievements</div>
+
+                  {/* Streak card */}
+                  <div style={{background:streak>0?"linear-gradient(135deg,#f97316,#ef4444)":"white",borderRadius:16,padding:18,boxShadow:"var(--shadow)",marginBottom:16,color:streak>0?"white":"var(--dark)"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:14}}>
+                      <div style={{fontSize:"2.8rem"}}>🔥</div>
+                      <div>
+                        <div style={{fontWeight:900,fontSize:"1.6rem",fontFamily:"'Fredoka One',cursive"}}>
+                          {streak} {streak===1?"day":"days"}
+                        </div>
+                        <div style={{fontWeight:700,fontSize:".88rem",opacity:.9}}>
+                          {streak===0?"No streak yet — complete a chore today to start one!":
+                           streak<3?"Keep going! Reach 3 days for your first streak badge.":
+                           streak<7?"Amazing! Keep it up for the Week Warrior badge 🗓️":
+                           "Incredible streak! You are on fire! 🔥"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Badge grid */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:10}}>
+                    {ACHIEVEMENTS.map(a=>{
+                      const earned = unlocked.includes(a.id);
+                      return(
+                        <div key={a.id} style={{
+                          background:earned?"white":"#f8fafc",
+                          borderRadius:14,padding:"14px 12px",
+                          boxShadow:earned?"var(--shadow)":"none",
+                          border:earned?"2px solid var(--green)":"2px solid #e2e8f0",
+                          textAlign:"center",
+                          opacity:earned?1:0.55,
+                          transition:"all .2s"
+                        }}>
+                          <div style={{fontSize:"2rem",marginBottom:6,filter:earned?"none":"grayscale(100%)"}}>{a.icon}</div>
+                          <div style={{fontWeight:800,fontSize:".85rem",color:earned?"var(--dark)":"var(--mid)"}}>{a.label}</div>
+                          <div style={{fontSize:".72rem",color:"var(--mid)",fontWeight:600,marginTop:3,lineHeight:1.4}}>{a.desc}</div>
+                          {earned&&<div style={{marginTop:6,fontSize:".72rem",fontWeight:800,color:"var(--green)"}}>✓ Unlocked!</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {unlocked.length===0&&(
+                    <div style={{textAlign:"center",marginTop:16,color:"var(--mid)",fontWeight:600,fontSize:".9rem"}}>
+                      Complete chores to unlock your first badge! ⭐
+                    </div>
+                  )}
+                  <div style={{marginTop:12,textAlign:"center",fontSize:".82rem",color:"var(--mid)",fontWeight:600}}>
+                    {unlocked.length} of {ACHIEVEMENTS.length} badges unlocked
+                  </div>
+                </>
+              );
+            })()}
+
           </div>
         </div>
 
@@ -1511,6 +2188,7 @@ export default function App() {
                 ["chores","🧹 Chores"],
                 ["banks","🏦 Banks"],
                 ["children","👦 Children"],
+                ["checklist","✅ Checklist"],
                 ["settings","⚙️ Settings"],
                 ["help","❓ Help"],
               ].map(([t,l])=><button key={t} className={`tab ${parentTab===t?"active":""}`} onClick={()=>setParentTab(t)} style={{fontSize:".74rem"}}>{l}</button>)}
@@ -1521,10 +2199,10 @@ export default function App() {
               <>
                 <div className="section-title">✅ Pending Approvals</div>
                 {allPending.length===0&&<div className="empty"><div className="empty-icon">🎉</div><div className="empty-text">All caught up!</div></div>}
-                {allPending.map(req=>{const child=data.children.find(c=>c.id===req.childId);const chore=data.chores.find(c=>c.id===req.choreId);return<ApprovalCard key={req.id} req={req} child={child} chore={chore} rate={rate} onApprove={()=>handleApprove(req.id)} onReject={()=>handleReject(req.id)}/>;  })}
+                {allPending.map(req=>{const child=data.children.find(c=>c.id===req.childId);const chore=data.chores.find(c=>c.id===req.choreId);return<ApprovalCard key={req.id} req={req} child={child} chore={chore} rate={rate} currency={currency} onReview={()=>setApprovalModal({reqId:req.id})} readOnly={false}/>;  })}
                 {data.choreRequests.filter(r=>r.status!=="pending").length>0&&(<>
                   <div className="divider"/><div className="section-title">📋 Recent History</div>
-                  {data.choreRequests.filter(r=>r.status!=="pending").slice(0,10).map(req=>{const child=data.children.find(c=>c.id===req.childId);const chore=data.chores.find(c=>c.id===req.choreId);return<ApprovalCard key={req.id} req={req} child={child} chore={chore} rate={rate} onApprove={()=>{}} onReject={()=>{}}/>;  })}
+                  {data.choreRequests.filter(r=>r.status!=="pending").slice(0,10).map(req=>{const child=data.children.find(c=>c.id===req.childId);const chore=data.chores.find(c=>c.id===req.choreId);return<ApprovalCard key={req.id} req={req} child={child} chore={chore} rate={rate} currency={currency} readOnly={true}/>;  })}
                 </>)}
               </>
             )}
@@ -1631,6 +2309,11 @@ export default function App() {
                         </div>
                       </div>
                       <EditChildInline child={child} onSave={upd=>doUpdate(d=>({...d,children:d.children.map(c=>c.id===child.id?{...c,...upd}:c)}))}/>
+                      <MilestoneRewards
+                        childId={child.id}
+                        milestoneRewards={data.milestoneRewards||{}}
+                        onSave={(childId,vals)=>doUpdate(d=>({...d,milestoneRewards:{...(d.milestoneRewards||{}),[childId]:vals}}))}
+                      />
                     </div>
                   );
                 })}
@@ -1711,11 +2394,24 @@ export default function App() {
             )}
 
             {/* HELP */}
+            {parentTab==="checklist"&&(
+              <ChecklistManager data={data} doUpdate={doUpdate} children={data.children} rate={rate} currency={currency}/>
+            )}
+
             {parentTab==="help"&&<HelpTab />}
           </div>
         </div>
 
         {/* Modals */}
+        {approvalModal&&(()=>{
+          const req=data.choreRequests.find(r=>r.id===approvalModal.reqId);
+          const child=data.children.find(c=>c.id===req?.childId);
+          const chore=data.chores.find(c=>c.id===req?.choreId);
+          return req ? <ApprovalModal req={req} child={child} chore={chore} rate={rate} currency={currency}
+            onApprove={(bonus,note)=>handleApprove(req.id,bonus,note)}
+            onReject={note=>handleReject(req.id,note)}
+            onClose={()=>setApprovalModal(null)}/> : null;
+        })()}
         {modal==="addChore"&&<AddChoreModal children={data.children} onSave={f=>{doUpdate(d=>({...d,chores:[...d.chores,{...f,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
         {modal==="addBank"&&selChild&&<AddBankModal childId={selChild} onSave={b=>{doUpdate(d=>({...d,banks:[...d.banks,{...b,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
         {modal==="addChild"&&<AddChildModal onSave={c=>{doUpdate(d=>({...d,children:[...d.children,{...c,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
