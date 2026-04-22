@@ -31,6 +31,10 @@ const defaultData = {
   ],
   choreRequests: [],
   transactions: [],
+  // piggyBanks: { childId: { savedDollars, target, targetLabel } }
+  piggyBanks: {},
+  // payoutRequests: [{ id, childId, amount, note, status, time }]
+  payoutRequests: [],
   // checklist: shared items + per-child items
   // { id, label, icon, points, scope: "all"|childId }
   checklistItems: [
@@ -307,6 +311,12 @@ const styles = `
 
   .notif-dot{background:var(--red);color:white;border-radius:50%;width:20px;height:20px;font-size:.7rem;font-weight:900;display:inline-flex;align-items:center;justify-content:center;}
 
+  .piggy-card{background:linear-gradient(135deg,#f97316,#ef4444);color:white;border-radius:20px;padding:22px;box-shadow:0 8px 32px rgba(249,115,22,.35);margin-bottom:16px;position:relative;overflow:hidden;}
+  .piggy-card::before{content:'';position:absolute;top:-30px;right:-30px;width:110px;height:110px;border-radius:50%;background:rgba(255,255,255,.12);}
+  .piggy-label{font-size:.78rem;opacity:.88;font-weight:700;text-transform:uppercase;letter-spacing:1px;}
+  .piggy-amount{font-family:'Fredoka One',cursive;font-size:2.6rem;line-height:1;}
+  .piggy-sub{font-size:.85rem;opacity:.88;font-weight:700;}
+
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px);}
   .modal{background:white;border-radius:20px;padding:24px;width:100%;max-width:480px;box-shadow:var(--shadow-lg);max-height:92vh;overflow-y:auto;}
   .modal-title{font-family:'Fredoka One',cursive;font-size:1.3rem;margin-bottom:18px;}
@@ -315,6 +325,9 @@ const styles = `
   .form-label{font-weight:700;font-size:.82rem;color:var(--mid);margin-bottom:5px;display:block;}
   .form-input{width:100%;padding:11px 13px;border:2px solid #e2e8f0;border-radius:12px;font-family:'Nunito',sans-serif;font-size:.92rem;font-weight:600;outline:none;transition:border-color .2s;color:var(--dark);}
   .form-input:focus{border-color:var(--blue);}
+  .form-input::placeholder{color:#b0bec5;font-weight:500;}
+  input::placeholder{color:#b0bec5;font-weight:500;}
+  textarea::placeholder{color:#b0bec5;font-weight:500;}
   .form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
   .checkbox-label{display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer;}
   .checkbox-label input{width:17px;height:17px;cursor:pointer;}
@@ -373,15 +386,69 @@ function ChildPinModal({ child, onSuccess, onCancel }) {
 // ─── AddChoreModal ────────────────────────────────────────────────────────────
 function AddChoreModal({ children, onSave, onClose }) {
   const [f,setF]=useState({title:"",icon:"⭐",points:2,requiresPhoto:false,recurring:true});
-  const icons=["⭐","🍽️","🧹","🗑️","🛏️","🪴","🐕","🚗","👕","🧺","🪣","🪟","🍳","🧼","📚","🐾","🌿","🧽","🪥","🛒"];
+  const icons=[
+    // Cleaning
+    "🧹","🧽","🪣","🧴","🧼","🪥","🚿","🛁","🪠","🧻",
+    // Kitchen
+    "🍽️","🥄","🍳","🫙","🧊","🥡","🍱","🛒","🥛","🍵",
+    // Laundry & tidying
+    "👕","🧺","👗","🧦","👟","🪡","🛏️","🪑","🗄️","📦",
+    // Outdoor / garden
+    "🌿","🌱","🪴","🪻","🐕","🐈","🐠","🌾","🍂","🪨",
+    // General home
+    "🗑️","🚗","🪟","🏠","💡","🔧","🔑","📬","🪞","🛋️",
+    // Study / routine
+    "📚","📖","✏️","🎒","💻","🎵","⏰","🧘","🏃","💧",
+    // Fun / misc
+    "⭐","🌟","🎯","🏆","💪","🙌","✅","🎉","🔥","❤️",
+  ];
+  const [customIcon, setCustomIcon] = useState("");
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const iconCategories=[
+    {label:"Cleaning",   icons:["🧹","🧽","🪣","🧴","🧼","🪥","🚿","🛁","🪠","🧻"]},
+    {label:"Kitchen",    icons:["🍽️","🥄","🍳","🫙","🧊","🛒","🥛","🍵","🍱","🥡"]},
+    {label:"Laundry",    icons:["👕","🧺","👗","🧦","👟","🪡","🛏️","🪑","📦","🗄️"]},
+    {label:"Garden",     icons:["🌿","🌱","🪴","🪻","🐕","🐈","🐠","🌾","🍂","🪨"]},
+    {label:"Home",       icons:["🗑️","🚗","🪟","🏠","💡","🔧","🔑","📬","🪞","🛋️"]},
+    {label:"Study",      icons:["📚","📖","✏️","🎒","💻","🎵","⏰","🧘","🏃","💧"]},
+    {label:"Rewards",    icons:["⭐","🌟","🎯","🏆","💪","🙌","✅","🎉","🔥","❤️"]},
+  ];
   return(
     <div className="modal-overlay"><div className="modal">
       <div className="modal-title">✨ New Chore</div>
       <div className="form-group">
         <label className="form-label">Icon</label>
-        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {icons.map(ic=><div key={ic} onClick={()=>set("icon",ic)} style={{fontSize:"1.5rem",cursor:"pointer",padding:5,borderRadius:9,background:f.icon===ic?"#dbeafe":"#f1f5f9",border:f.icon===ic?"2px solid #3b82f6":"2px solid transparent"}}>{ic}</div>)}
+        {/* Free-type emoji field */}
+        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10}}>
+          <div style={{fontSize:"2rem",width:44,height:44,borderRadius:10,border:"2px solid var(--blue)",display:"flex",alignItems:"center",justifyContent:"center",background:"#eff6ff",flexShrink:0}}>{f.icon}</div>
+          <input className="form-input" placeholder="Type or paste any emoji here..." style={{flex:1}}
+            value={customIcon}
+            onChange={e=>{
+              const val=e.target.value;
+              setCustomIcon(val);
+              // Extract first emoji/character
+              const match=[...val].find(c=>c.codePointAt(0)>127);
+              if(match) set("icon",match);
+            }}/>
+        </div>
+        {/* Categorised grid */}
+        <div style={{maxHeight:220,overflowY:"auto",borderRadius:10,border:"1px solid #f1f5f9",padding:8}}>
+          {iconCategories.map(cat=>(
+            <div key={cat.label} style={{marginBottom:8}}>
+              <div style={{fontSize:".7rem",fontWeight:800,color:"var(--mid)",marginBottom:4,textTransform:"uppercase",letterSpacing:".5px"}}>{cat.label}</div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                {cat.icons.map(ic=>(
+                  <div key={ic} onClick={()=>{set("icon",ic);setCustomIcon("");}}
+                    style={{fontSize:"1.5rem",cursor:"pointer",padding:5,borderRadius:9,
+                      background:f.icon===ic?"#dbeafe":"#f8fafc",
+                      border:f.icon===ic?"2px solid #3b82f6":"2px solid transparent",
+                      transition:"all .15s"}}>
+                    {ic}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
       <div className="form-group"><label className="form-label">Chore Name</label><input className="form-input" value={f.title} onChange={e=>set("title",e.target.value)} placeholder="e.g. Wash Dishes"/></div>
@@ -409,15 +476,49 @@ function AddChoreModal({ children, onSave, onClose }) {
 // ─── AddBankModal ─────────────────────────────────────────────────────────────
 function AddBankModal({ childId, onSave, onClose }) {
   const [f,setF]=useState({name:"",icon:"🏦",type:"recurring",costPoints:5,reward:""});
-  const icons=["🏦","📱","🎮","🎬","🍦","🎪","📚","🚲","👟","🎁","✈️","🎨","🎵","🏀","⭐"];
+  const [customBankIcon,setCustomBankIcon]=useState("");
+  const bankIconCats=[
+    {label:"Tech & Fun",   icons:["📱","🎮","🎬","🎧","💻","🕹️","📺","🎙️","📷","🔋"]},
+    {label:"Treats",       icons:["🍦","🍕","🍔","🍩","🧁","🍫","🎂","🥤","🍿","🧃"]},
+    {label:"Activities",   icons:["🎪","🎨","🎭","🎡","🏊","⚽","🏀","🎯","🎳","🎲"]},
+    {label:"Shopping",     icons:["👟","👗","🎒","🧸","🪆","🎁","🛍️","💄","🕶️","⌚"]},
+    {label:"Adventure",    icons:["✈️","🏕️","🚲","🛴","🚀","🌊","🏔️","🎠","🎢","🎟️"]},
+    {label:"Learning",     icons:["📚","🎵","🎸","🎹","🖌️","✏️","🔭","🔬","🧩","📐"]},
+    {label:"Goals",        icons:["⭐","🏆","🎯","💰","🐷","🏦","💎","🌟","🚀","❤️"]},
+  ];
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   return(
     <div className="modal-overlay"><div className="modal">
       <div className="modal-title">🏦 New Savings Bank</div>
       <div className="form-group">
         <label className="form-label">Icon</label>
-        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {icons.map(ic=><div key={ic} onClick={()=>set("icon",ic)} style={{fontSize:"1.5rem",cursor:"pointer",padding:5,borderRadius:9,background:f.icon===ic?"#dbeafe":"#f1f5f9",border:f.icon===ic?"2px solid #3b82f6":"2px solid transparent"}}>{ic}</div>)}
+        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10}}>
+          <div style={{fontSize:"2rem",width:44,height:44,borderRadius:10,border:"2px solid var(--purple)",display:"flex",alignItems:"center",justifyContent:"center",background:"#f5f3ff",flexShrink:0}}>{f.icon}</div>
+          <input className="form-input" placeholder="Type or paste any emoji..." style={{flex:1}}
+            value={customBankIcon}
+            onChange={e=>{
+              setCustomBankIcon(e.target.value);
+              const match=[...e.target.value].find(c=>c.codePointAt(0)>127);
+              if(match) set("icon",match);
+            }}/>
+        </div>
+        <div style={{maxHeight:200,overflowY:"auto",borderRadius:10,border:"1px solid #f1f5f9",padding:8}}>
+          {bankIconCats.map(cat=>(
+            <div key={cat.label} style={{marginBottom:8}}>
+              <div style={{fontSize:".7rem",fontWeight:800,color:"var(--mid)",marginBottom:4,textTransform:"uppercase",letterSpacing:".5px"}}>{cat.label}</div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                {cat.icons.map(ic=>(
+                  <div key={ic} onClick={()=>{set("icon",ic);setCustomBankIcon("");}}
+                    style={{fontSize:"1.5rem",cursor:"pointer",padding:5,borderRadius:9,
+                      background:f.icon===ic?"#ede9fe":"#f8fafc",
+                      border:f.icon===ic?"2px solid var(--purple)":"2px solid transparent",
+                      transition:"all .15s"}}>
+                    {ic}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
       <div className="form-group"><label className="form-label">Bank Name</label><input className="form-input" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Screen Time"/></div>
@@ -859,6 +960,192 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
   );
 }
 
+// ─── PiggyBankCard (child view) ──────────────────────────────────────────────
+function PiggyBankCard({ childId, data, doUpdate, rate, currency }) {
+  const piggy = getPiggyBank(data, childId);
+  const child = data.children.find(c=>c.id===childId);
+  const [depositPts, setDepositPts]   = useState("");
+  const [setTarget, setSetTarget]     = useState(false);
+  const [targetAmt, setTargetAmt]     = useState(piggy.target||"");
+  const [targetLabel, setTargetLabel] = useState(piggy.targetLabel||"");
+  const [payoutAmt, setPayoutAmt]     = useState("");
+  const [payoutNote, setPayoutNote]   = useState("");
+  const [showPayout, setShowPayout]   = useState(false);
+  const [showDeposit, setShowDeposit] = useState(false);
+
+  const depositDollars = (+depositPts||0) * rate;
+  const pct = piggy.target ? Math.min(100, Math.round((piggy.savedDollars/piggy.target)*100)) : null;
+  const pendingPayout = (data.payoutRequests||[]).find(r=>r.childId===childId&&r.status==="pending");
+
+  const doDeposit = () => {
+    if (!depositPts || +depositPts <= 0 || +depositPts > (child?.walletPoints||0)) return;
+    const dollars = (+depositPts) * rate;
+    doUpdate(d=>({
+      ...d,
+      children: d.children.map(c=>c.id===childId?{...c,walletPoints:c.walletPoints-(+depositPts)}:c),
+      piggyBanks: {...(d.piggyBanks||{}), [childId]:{...getPiggyBank(d,childId), savedDollars:(getPiggyBank(d,childId).savedDollars+dollars)}},
+      transactions: [{id:uid(),childId,type:"piggy",points:-(+depositPts),label:`🐷 Piggy Bank deposit`,time:now()},...d.transactions],
+    }));
+    setDepositPts(""); setShowDeposit(false);
+  };
+
+  const saveTarget = () => {
+    doUpdate(d=>({...d, piggyBanks:{...(d.piggyBanks||{}), [childId]:{...getPiggyBank(d,childId), target:+targetAmt||null, targetLabel:targetLabel.trim()}}}));
+    setSetTarget(false);
+  };
+
+  const requestPayout = () => {
+    if (!payoutAmt || +payoutAmt <= 0 || +payoutAmt > piggy.savedDollars) return;
+    doUpdate(d=>({...d, payoutRequests:[{id:uid(),childId,amount:+payoutAmt,note:payoutNote.trim(),status:"pending",time:now()},...(d.payoutRequests||[])]}));
+    setPayoutAmt(""); setPayoutNote(""); setShowPayout(false);
+  };
+
+  return (
+    <div className="piggy-card">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+        <div>
+          <div className="piggy-label">🐷 Piggy Bank</div>
+          <div className="piggy-amount">{money(piggy.savedDollars,1,currency)}</div>
+          <div className="piggy-sub">Real money saved</div>
+        </div>
+        <div style={{fontSize:"3rem",opacity:.9}}>🐷</div>
+      </div>
+
+      {/* Target progress */}
+      {piggy.target&&(
+        <div style={{marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:".78rem",opacity:.88,fontWeight:700,marginBottom:4}}>
+            <span>Saving for: {piggy.targetLabel||"My goal"}</span>
+            <span>{pct}%</span>
+          </div>
+          <div style={{height:8,background:"rgba(255,255,255,.25)",borderRadius:99,overflow:"hidden"}}>
+            <div style={{height:"100%",background:"white",borderRadius:99,width:`${pct}%`,transition:"width .4s"}}/>
+          </div>
+          <div style={{fontSize:".75rem",opacity:.85,fontWeight:600,marginTop:3}}>
+            {money(piggy.savedDollars,1,currency)} of {money(piggy.target,1,currency)}
+          </div>
+        </div>
+      )}
+
+      {/* Pending payout notice */}
+      {pendingPayout&&(
+        <div style={{background:"rgba(255,255,255,.2)",borderRadius:10,padding:"8px 12px",marginBottom:10,fontSize:".82rem",fontWeight:700}}>
+          ⏳ Payout of {money(pendingPayout.amount,1,currency)} pending parent approval
+        </div>
+      )}
+
+      {/* Actions */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button className="btn btn-sm" style={{background:"rgba(255,255,255,.25)",color:"white",fontWeight:800}} onClick={()=>{setShowDeposit(s=>!s);setShowPayout(false);}}>
+          ➕ Deposit
+        </button>
+        {piggy.savedDollars>0&&!pendingPayout&&(
+          <button className="btn btn-sm" style={{background:"rgba(255,255,255,.25)",color:"white",fontWeight:800}} onClick={()=>{setShowPayout(s=>!s);setShowDeposit(false);}}>
+            💸 Request Payout
+          </button>
+        )}
+        <button className="btn btn-sm" style={{background:"rgba(255,255,255,.15)",color:"white",fontWeight:800}} onClick={()=>setSetTarget(s=>!s)}>
+          🎯 {piggy.target?"Change Goal":"Set Goal"}
+        </button>
+      </div>
+
+      {/* Deposit panel */}
+      {showDeposit&&(
+        <div style={{background:"rgba(255,255,255,.15)",borderRadius:12,padding:12,marginTop:10}}>
+          <div style={{fontWeight:800,fontSize:".85rem",marginBottom:8}}>Deposit from wallet</div>
+          <div style={{fontSize:".78rem",opacity:.88,fontWeight:600,marginBottom:6}}>
+            Wallet: {child?.walletPoints||0} pts · {money((child?.walletPoints||0)*rate,1,currency)}
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <input type="number" min="1" max={child?.walletPoints||0} placeholder="pts"
+              style={{width:80,padding:"7px 10px",borderRadius:10,border:"none",fontFamily:"Nunito,sans-serif",fontWeight:700,fontSize:".9rem",textAlign:"center"}}
+              value={depositPts} onChange={e=>setDepositPts(e.target.value)}/>
+            <span style={{fontWeight:700,fontSize:".85rem"}}>pts = {money(depositDollars,1,currency)}</span>
+            <button className="btn btn-sm" style={{background:"white",color:"var(--orange)",fontWeight:800,marginLeft:"auto"}} onClick={doDeposit}>Save!</button>
+          </div>
+        </div>
+      )}
+
+      {/* Payout panel */}
+      {showPayout&&(
+        <div style={{background:"rgba(255,255,255,.15)",borderRadius:12,padding:12,marginTop:10}}>
+          <div style={{fontWeight:800,fontSize:".85rem",marginBottom:6}}>Request a payout</div>
+          <div style={{fontSize:".78rem",opacity:.88,fontWeight:600,marginBottom:8}}>A parent will approve and pay you the cash.</div>
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+            <span style={{fontWeight:700}}>{CURRENCIES.find(c=>c.code===currency)?.symbol||"$"}</span>
+            <input type="number" min="0.50" step="0.50" max={piggy.savedDollars} placeholder="Amount"
+              style={{flex:1,padding:"7px 10px",borderRadius:10,border:"none",fontFamily:"Nunito,sans-serif",fontWeight:700,fontSize:".9rem"}}
+              value={payoutAmt} onChange={e=>setPayoutAmt(e.target.value)}/>
+          </div>
+          <input placeholder="Note (optional, e.g. for new shoes)"
+            style={{width:"100%",padding:"7px 10px",borderRadius:10,border:"none",fontFamily:"Nunito,sans-serif",fontWeight:600,fontSize:".82rem",marginBottom:8}}
+            value={payoutNote} onChange={e=>setPayoutNote(e.target.value)}/>
+          <button className="btn btn-sm" style={{background:"white",color:"var(--orange)",fontWeight:800,width:"100%"}} onClick={requestPayout}>
+            Send Request to Parent
+          </button>
+        </div>
+      )}
+
+      {/* Set target panel */}
+      {setTarget&&(
+        <div style={{background:"rgba(255,255,255,.15)",borderRadius:12,padding:12,marginTop:10}}>
+          <div style={{fontWeight:800,fontSize:".85rem",marginBottom:8}}>Set a savings goal</div>
+          <input placeholder="What are you saving for?"
+            style={{width:"100%",padding:"7px 10px",borderRadius:10,border:"none",fontFamily:"Nunito,sans-serif",fontWeight:600,fontSize:".85rem",marginBottom:8}}
+            value={targetLabel} onChange={e=>setTargetLabel(e.target.value)}/>
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+            <span style={{fontWeight:700}}>{CURRENCIES.find(c=>c.code===currency)?.symbol||"$"}</span>
+            <input type="number" min="1" step="0.50" placeholder="Target amount"
+              style={{flex:1,padding:"7px 10px",borderRadius:10,border:"none",fontFamily:"Nunito,sans-serif",fontWeight:700,fontSize:".9rem"}}
+              value={targetAmt} onChange={e=>setTargetAmt(e.target.value)}/>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn btn-sm" style={{background:"white",color:"var(--orange)",fontWeight:800,flex:1}} onClick={saveTarget}>Save Goal</button>
+            <button className="btn btn-sm" style={{background:"rgba(255,255,255,.2)",color:"white",fontWeight:800}} onClick={()=>setSetTarget(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PiggyParentPanel (parent children tab) ──────────────────────────────────
+function PiggyParentPanel({ child, data, doUpdate, currency, rate }) {
+  const [topupAmt, setTopupAmt]   = useState("");
+  const [topupOpen, setTopupOpen] = useState(false);
+  const piggy = getPiggyBank(data, child.id);
+
+  const doTopup = () => {
+    if(!topupAmt||+topupAmt<=0)return;
+    doUpdate(d=>({...d,
+      piggyBanks:{...(d.piggyBanks||{}),[child.id]:{...getPiggyBank(d,child.id),savedDollars:getPiggyBank(d,child.id).savedDollars+(+topupAmt)}},
+      transactions:[{id:uid(),childId:child.id,type:"piggy",points:0,label:`🐷 Parent top-up: ${money(+topupAmt,1,currency)}`,time:now()},...d.transactions]
+    }));
+    setTopupAmt(""); setTopupOpen(false);
+  };
+
+  return(
+    <div style={{background:"#fff1eb",borderRadius:12,padding:12,marginTop:8,border:"2px solid #fed7aa"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:topupOpen?10:0}}>
+        <div>
+          <div style={{fontWeight:800,fontSize:".88rem",color:"var(--orange)"}}>🐷 Piggy Bank: <strong>{money(piggy.savedDollars,1,currency)}</strong></div>
+          {piggy.targetLabel&&<div style={{fontSize:".75rem",color:"var(--mid)",fontWeight:600}}>Saving for: {piggy.targetLabel} ({money(piggy.target||0,1,currency)} goal)</div>}
+        </div>
+        <button className="btn btn-sm" style={{background:"var(--orange)",color:"white"}} onClick={()=>setTopupOpen(s=>!s)}>+ Top Up</button>
+      </div>
+      {topupOpen&&(
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <span style={{fontWeight:700,color:"var(--orange)"}}>{CURRENCIES.find(c=>c.code===currency)?.symbol||"$"}</span>
+          <input type="number" min="0.50" step="0.50" placeholder="Amount to add"
+            style={{flex:1,padding:"7px 10px",borderRadius:10,border:"2px solid #fed7aa",fontFamily:"Nunito,sans-serif",fontWeight:700,fontSize:".9rem",outline:"none"}}
+            value={topupAmt} onChange={e=>setTopupAmt(e.target.value)}/>
+          <button className="btn btn-sm" style={{background:"var(--orange)",color:"white",fontWeight:800}} onClick={doTopup}>Add</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── MilestoneRewards ─────────────────────────────────────────────────────────
 function MilestoneRewards({ childId, milestoneRewards, onSave }) {
   const [open, setOpen] = useState(false);
@@ -913,9 +1200,10 @@ function MilestoneRewards({ childId, milestoneRewards, onSave }) {
 function ChecklistManager({ data, doUpdate, children, rate, currency }) {
   const [newLabel, setNewLabel] = useState("");
   const [newIcon, setNewIcon]   = useState("✅");
+  const [customChecklistIcon, setCustomChecklistIcon] = useState("");
   const [newPts, setNewPts]     = useState(0);
   const [newScope, setNewScope] = useState("all");
-  const icons = ["✅","🦷","🛏️","🚿","👕","🎒","📚","💧","🥗","🏃","🐾","🧴","😴","🙏","🌟"];
+  const checklistIconList = ["✅","🦷","🛏️","🚿","👕","🎒","📚","💧","🥗","🏃","🐾","🧴","😴","🙏","🌟","💊","🍎","🥤","🫧","🧘","☀️","🌙","👁️","✋","🤝","💆","🪥","🧹","🎯","💪","🫁","🧠","❤️","🌈","🎵"];
   const today = todayISO();
 
   const addItem = () => {
@@ -998,10 +1286,23 @@ function ChecklistManager({ data, doUpdate, children, rate, currency }) {
       <div className="section-title" style={{fontSize:"1.1rem"}}>⚙️ Manage Checklist Items</div>
       <div className="card" style={{marginBottom:14}}>
         <div style={{fontWeight:800,marginBottom:10,fontSize:".9rem"}}>Add New Item</div>
-        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
-          {icons.map(ic=>(
-            <div key={ic} onClick={()=>setNewIcon(ic)}
-              style={{fontSize:"1.4rem",cursor:"pointer",padding:5,borderRadius:8,background:newIcon===ic?"#dbeafe":"#f1f5f9",border:newIcon===ic?"2px solid #3b82f6":"2px solid transparent"}}>
+        {/* Free-type emoji field */}
+        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+          <div style={{fontSize:"1.8rem",width:40,height:40,borderRadius:10,border:"2px solid var(--blue)",display:"flex",alignItems:"center",justifyContent:"center",background:"#eff6ff",flexShrink:0}}>{newIcon}</div>
+          <input className="form-input" placeholder="Type or paste any emoji..." style={{flex:1}}
+            value={customChecklistIcon}
+            onChange={e=>{
+              setCustomChecklistIcon(e.target.value);
+              const match=[...e.target.value].find(c=>c.codePointAt(0)>127);
+              if(match) setNewIcon(match);
+            }}/>
+        </div>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:10}}>
+          {checklistIconList.map(ic=>(
+            <div key={ic} onClick={()=>{setNewIcon(ic);setCustomChecklistIcon("");}}
+              style={{fontSize:"1.4rem",cursor:"pointer",padding:5,borderRadius:8,
+                background:newIcon===ic&&!customChecklistIcon?"#dbeafe":"#f1f5f9",
+                border:newIcon===ic&&!customChecklistIcon?"2px solid #3b82f6":"2px solid transparent"}}>
               {ic}
             </div>
           ))}
@@ -1072,6 +1373,7 @@ function choresuggestions(age) {
 function SetupWizard({ onComplete }) {
   const TOTAL_STEPS = 8;
   const [step, setStep]           = useState(1);
+  const [slide, setSlide]         = useState(0);
   const [familyName, setFamilyName] = useState("");
   const [parentName, setParentName] = useState("");
   const [parentPin, setParentPin]   = useState("");
@@ -1087,9 +1389,7 @@ function SetupWizard({ onComplete }) {
   const [calStartDay, setCalStartDay] = useState("Mon");
   const [calAnchor, setCalAnchor]   = useState("");
 
-  const avatarList = ["🦁","🐯","🦊","🐨","🐼","🐸","🦄","🐙","🦋","🐬","🦖","🐧","🦅","🐻","🦝"];
-
-  const setKid = (i, k, v) => setKids(arr => arr.map((c,idx)=>idx===i?{...c,[k]:v}:c));
+  const avatarList = ["🦁","🐯","🦊","🐨","🐼","🐸","🦄","🐙","🦋","🐬","🦖","🐧","🦅","🐻","🦝"];  const setKid = (i, k, v) => setKids(arr => arr.map((c,idx)=>idx===i?{...c,[k]:v}:c));
 
   const updateNumKids = n => {
     setNumKids(n);
@@ -1177,18 +1477,158 @@ function SetupWizard({ onComplete }) {
   };
   const back = () => setStep(s=>s-1);
 
+  // Pre-compute intro slides outside JSX (no hooks allowed inside render callbacks)
+  const introSlides = [
+    {
+      emoji:"👋",
+      title:"Welcome to ChoreChart!",
+      subtitle:"Helping families build great habits and learn the real value of money.",
+      content:(
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {[
+            ["🧹","Kids earn points by completing chores"],
+            ["✅","Parents approve each chore before points are awarded"],
+            ["🏦","Points are saved in goal banks toward rewards"],
+            ["💰","Every point has a real dollar value you set"],
+            ["🏅","Badges and streaks keep kids motivated"],
+            ["📅","A fortnight calendar supports split care families"],
+          ].map(([icon,text])=>(
+            <div key={text} style={{display:"flex",gap:12,alignItems:"center",padding:"10px 12px",background:"#f8fafc",borderRadius:12}}>
+              <span style={{fontSize:"1.3rem"}}>{icon}</span>
+              <span style={{fontWeight:600,fontSize:".85rem",color:"var(--dark)",lineHeight:1.4}}>{text}</span>
+            </div>
+          ))}
+        </div>
+      ),
+      tip:"Setup takes about 3 minutes. You can change everything later in the parent portal.",
+    },
+    {
+      emoji:"🧹",
+      title:"How Chores Work",
+      subtitle:"Chores are the tasks kids complete to earn points.",
+      content:(
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{background:"var(--sky)",borderRadius:14,padding:14}}>
+            <div style={{fontWeight:800,fontSize:".9rem",marginBottom:8,color:"var(--blue)"}}>For Parents</div>
+            {[
+              ["➕","Create chores in the parent portal with a point value"],
+              ["📸","Optionally require a photo as proof of completion"],
+              ["🔄","Set chores as recurring (weekly) or one-off"],
+              ["📅","Pin specific chores to specific days in the calendar"],
+              ["✏️","Edit or remove chores anytime from the Chores tab"],
+            ].map(([icon,text])=>(
+              <div key={text} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:6}}>
+                <span style={{fontSize:"1.1rem",flexShrink:0}}>{icon}</span>
+                <span style={{fontSize:".82rem",fontWeight:600,color:"var(--dark)",lineHeight:1.4}}>{text}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{background:"var(--mint)",borderRadius:14,padding:14}}>
+            <div style={{fontWeight:800,fontSize:".9rem",marginBottom:8,color:"var(--green)"}}>For Kids</div>
+            {[
+              ["👀","Browse available chores in the Chores tab"],
+              ["📷","Upload a photo if the chore requires proof"],
+              ["📤","Tap Claim Chore to submit it for approval"],
+              ["⏳","Wait for a parent to approve — then points land in the wallet!"],
+            ].map(([icon,text])=>(
+              <div key={text} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:6}}>
+                <span style={{fontSize:"1.1rem",flexShrink:0}}>{icon}</span>
+                <span style={{fontSize:".82rem",fontWeight:600,color:"var(--dark)",lineHeight:1.4}}>{text}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{background:"var(--yellow)",borderRadius:12,padding:"10px 12px",fontSize:".8rem",fontWeight:700,color:"#92400e",lineHeight:1.5}}>
+            💡 Parents can also add a bonus on top when approving — great for exceptional effort!
+          </div>
+        </div>
+      ),
+      tip:null,
+    },
+    {
+      emoji:"💰",
+      title:"The Wallet & Banks",
+      subtitle:"Points earned go into a wallet. Kids then choose how to save them.",
+      content:(
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{background:"linear-gradient(135deg,#667eea,#764ba2)",borderRadius:14,padding:16,color:"white"}}>
+            <div style={{fontWeight:800,fontSize:".95rem",marginBottom:6}}>💼 The Wallet</div>
+            <div style={{fontSize:".82rem",lineHeight:1.6,opacity:.92,fontWeight:600}}>
+              When a chore is approved, points go straight into the wallet. The wallet is like a holding account — points sit here until the child decides where to put them.
+            </div>
+          </div>
+          <div style={{background:"white",borderRadius:14,padding:14,boxShadow:"0 2px 12px rgba(0,0,0,.08)"}}>
+            <div style={{fontWeight:800,fontSize:".9rem",marginBottom:8,color:"var(--purple)"}}>🏦 Savings Banks</div>
+            {[
+              ["🔄","Recurring banks reset after each redeem — e.g. 5 pts = 15 min screen time"],
+              ["🎯","Goal banks are one-off targets — e.g. 40 pts = new LEGO set"],
+              ["💸","Kids use the Distribute tab to move points from wallet into banks"],
+              ["📊","Progress bars show how close each bank is to its goal"],
+            ].map(([icon,text])=>(
+              <div key={text} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:8}}>
+                <span style={{fontSize:"1.1rem",flexShrink:0}}>{icon}</span>
+                <span style={{fontSize:".82rem",fontWeight:600,color:"var(--dark)",lineHeight:1.4}}>{text}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{background:"var(--sky)",borderRadius:12,padding:"10px 12px",fontSize:".8rem",fontWeight:700,color:"var(--blue)",lineHeight:1.5}}>
+            💡 Parents create the banks — kids choose how to fill them. This teaches budgeting!
+          </div>
+        </div>
+      ),
+      tip:null,
+    },
+    {
+      emoji:"🎉",
+      title:"Claiming Rewards",
+      subtitle:"When a bank is full, kids can redeem it for their reward.",
+      content:(
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{background:"white",borderRadius:14,padding:14,boxShadow:"0 2px 12px rgba(0,0,0,.08)"}}>
+            <div style={{fontWeight:800,fontSize:".9rem",marginBottom:8,color:"var(--green)"}}>How to Redeem</div>
+            {[
+              ["1️⃣","Go to the Banks tab when a bank reaches its goal"],
+              ["2️⃣","Tap the Redeem button — a nudge screen appears"],
+              ["3️⃣","The nudge shows what you are about to spend and what you could have saved instead"],
+              ["4️⃣","Choose to redeem or keep saving — it is always your choice!"],
+              ["5️⃣","Recurring rewards reset so you can earn them again and again"],
+            ].map(([icon,text])=>(
+              <div key={text} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:8}}>
+                <span style={{fontSize:"1.1rem",flexShrink:0}}>{icon}</span>
+                <span style={{fontSize:".82rem",fontWeight:600,color:"var(--dark)",lineHeight:1.4}}>{text}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{background:"#fef3c7",borderRadius:14,padding:14}}>
+            <div style={{fontWeight:800,fontSize:".9rem",marginBottom:8,color:"#92400e"}}>💡 The Money Lesson</div>
+            <div style={{fontSize:".82rem",fontWeight:600,color:"#92400e",lineHeight:1.6}}>
+              After each redemption, ChoreChart shows a running tally of how much has been spent on that reward compared to what could have been saved instead.
+            </div>
+          </div>
+          <div style={{background:"var(--mint)",borderRadius:12,padding:"10px 12px",fontSize:".8rem",fontWeight:700,color:"#065f46",lineHeight:1.5}}>
+            All earnings, bonuses, and redemptions are logged in the History tab.
+          </div>
+        </div>
+      ),
+      tip:null,
+    },
+  ];
+  const currentSlide = introSlides[slide] || introSlides[0];
+  const isLastSlide  = slide === introSlides.length - 1;
+
   // Step styles
   const wrapStyle = { minHeight:"100vh", background:"linear-gradient(160deg,#e0f2fe 0%,#ede9fe 100%)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"flex-start", padding:"32px 20px 60px" };
   const cardStyle = { background:"white", borderRadius:20, padding:"28px 24px", width:"100%", maxWidth:500, boxShadow:"0 8px 40px rgba(0,0,0,.12)" };
-  const progressPct = Math.round(((step-1)/TOTAL_STEPS)*100);
 
   const ProgressBar = () => (
     <div style={{width:"100%",maxWidth:500,marginBottom:20}}>
       <div style={{display:"flex",justifyContent:"space-between",fontSize:".78rem",fontWeight:700,color:"var(--mid)",marginBottom:6}}>
-        <span>Step {step} of {TOTAL_STEPS}</span><span>{progressPct}% complete</span>
+        <span>{step===1?"Introduction":`Step ${step-1} of ${TOTAL_STEPS-1}`}</span>
+        <span>{step===1?"Swipe through to begin":`${Math.round(((step-2)/(TOTAL_STEPS-1))*100)}% complete`}</span>
       </div>
       <div style={{height:8,background:"rgba(255,255,255,.6)",borderRadius:99,overflow:"hidden"}}>
-        <div style={{height:"100%",background:"var(--blue)",borderRadius:99,width:`${progressPct}%`,transition:"width .4s"}}/>
+        <div style={{height:"100%",background:"var(--blue)",borderRadius:99,
+          width:step===1?"0%":`${Math.round(((step-2)/(TOTAL_STEPS-1))*100)}%`,
+          transition:"width .4s"}}/>
       </div>
     </div>
   );
@@ -1220,35 +1660,40 @@ function SetupWizard({ onComplete }) {
 
         <div style={cardStyle}>
 
-          {/* ── STEP 1: WELCOME ── */}
+          {/* ── INTRO SLIDES (before setup) ── */}
           {step===1&&(
             <>
-              <div style={{textAlign:"center",marginBottom:20}}>
-                <div style={{fontSize:"3rem",marginBottom:8}}>👋</div>
-                <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.5rem",marginBottom:8}}>Welcome to ChoreChart!</div>
-                <div style={{color:"var(--mid)",fontWeight:600,fontSize:".9rem",lineHeight:1.6}}>
-                  ChoreChart helps your family build great habits, earn rewards, and learn the real value of money — all in one place.
-                </div>
+              <div style={{textAlign:"center",marginBottom:18}}>
+                <div style={{fontSize:"2.8rem",marginBottom:6}}>{currentSlide.emoji}</div>
+                <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.35rem",marginBottom:6}}>{currentSlide.title}</div>
+                <div style={{color:"var(--mid)",fontWeight:600,fontSize:".82rem",lineHeight:1.5}}>{currentSlide.subtitle}</div>
               </div>
-              <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:20}}>
-                {[
-                  ["🧹","Kids earn points for completing chores"],
-                  ["✅","Parents approve each chore before points are awarded"],
-                  ["🏦","Points go into savings banks toward goals"],
-                  ["💰","Every point has a real dollar value you set"],
-                  ["🏅","Badges and streaks keep kids motivated"],
-                ].map(([icon,text])=>(
-                  <div key={text} style={{display:"flex",gap:12,alignItems:"center",padding:"10px 12px",background:"#f8fafc",borderRadius:12}}>
-                    <span style={{fontSize:"1.4rem"}}>{icon}</span>
-                    <span style={{fontWeight:600,fontSize:".88rem",color:"var(--dark)"}}>{text}</span>
-                  </div>
+              <div style={{maxHeight:400,overflowY:"auto",marginBottom:16}}>
+                {currentSlide.content}
+              </div>
+              {currentSlide.tip&&(
+                <div style={{background:"var(--sky)",borderRadius:10,padding:"9px 12px",marginBottom:14,fontSize:".8rem",fontWeight:700,color:"var(--blue)",lineHeight:1.5}}>
+                  💡 {currentSlide.tip}
+                </div>
+              )}
+              {/* Slide dots */}
+              <div style={{display:"flex",justifyContent:"center",gap:8,marginBottom:16}}>
+                {introSlides.map((_,i)=>(
+                  <div key={i} onClick={()=>setSlide(i)}
+                    style={{width:i===slide?24:8,height:8,borderRadius:99,background:i===slide?"var(--blue)":"#e2e8f0",cursor:"pointer",transition:"all .25s"}}/>
                 ))}
               </div>
-              <Tip text="Setup takes about 3 minutes. You can change everything later in the parent portal."/>
-              <button className="btn btn-blue" style={{width:"100%"}} onClick={()=>setStep(2)}>Let's get started →</button>
+              <div style={{display:"flex",gap:8}}>
+                {slide>0&&(
+                  <button className="btn btn-ghost" style={{flex:1}} onClick={()=>setSlide(s=>s-1)}>← Back</button>
+                )}
+                <button className="btn btn-blue" style={{flex:2}}
+                  onClick={()=>isLastSlide?(setStep(2),setSlide(0)):setSlide(s=>s+1)}>
+                  {isLastSlide?"Start Setup →":"Next →"}
+                </button>
+              </div>
             </>
           )}
-
           {/* ── STEP 2: FAMILY + PARENT ── */}
           {step===2&&(
             <>
@@ -1809,6 +2254,11 @@ function todayISO() {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
 
+// Get or create piggy bank for a child
+function getPiggyBank(data, childId) {
+  return data.piggyBanks?.[childId] || { savedDollars:0, target:null, targetLabel:"" };
+}
+
 function calcStreak(data, childId) {
   const earnTxs = data.transactions.filter(t=>t.childId===childId && t.type==="earn");
   if (earnTxs.length===0) return 0;
@@ -2067,10 +2517,14 @@ export default function App() {
     const child=data.children.find(c=>c.id===activeUser.id);
     const total=Object.values(distAmts).reduce((a,b)=>a+(+b||0),0);
     if(total>child.walletPoints||total<=0)return;
+    const piggyPts = +distAmts["__piggy__"]||0;
+    const piggyDollars = piggyPts * rate;
     doUpdate(d=>{
       const banks=d.banks.map(b=>{const add=+distAmts[b.id]||0;return add>0?{...b,savedPoints:b.savedPoints+add}:b;});
-      const txs=Object.entries(distAmts).filter(([,v])=>+v>0).map(([bid,v])=>{const b=d.banks.find(x=>x.id===bid);return{id:uid(),childId:activeUser.id,type:"save",points:-v,label:`→ ${b?.name}`,time:now()};});
-      return{...d,banks,children:d.children.map(c=>c.id===activeUser.id?{...c,walletPoints:c.walletPoints-total}:c),transactions:[...txs,...d.transactions]};
+      const txs=Object.entries(distAmts).filter(([k,v])=>+v>0&&k!=="__piggy__").map(([bid,v])=>{const b=d.banks.find(x=>x.id===bid);return{id:uid(),childId:activeUser.id,type:"save",points:-v,label:`→ ${b?.name}`,time:now()};});
+      const piggyTx = piggyPts>0 ? [{id:uid(),childId:activeUser.id,type:"piggy",points:-piggyPts,label:`🐷 Piggy Bank deposit`,time:now()}] : [];
+      const newPiggy = piggyPts>0 ? {...(d.piggyBanks||{}), [activeUser.id]:{...getPiggyBank(d,activeUser.id), savedDollars:(getPiggyBank(d,activeUser.id).savedDollars+piggyDollars)}} : d.piggyBanks;
+      return{...d,banks,piggyBanks:newPiggy,children:d.children.map(c=>c.id===activeUser.id?{...c,walletPoints:c.walletPoints-total}:c),transactions:[...piggyTx,...txs,...d.transactions]};
     });
     setDistAmts({});
   };
@@ -2320,7 +2774,24 @@ export default function App() {
             {childTab==="wallet"&&(
               <>
                 <div className="section-title">💰 Distribute Points</div>
-                {myBanks.length===0&&<div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No banks yet</div><div className="empty-sub">Ask a parent to set up savings banks!</div></div>}
+                {/* Piggy bank deposit row */}
+                {(()=>{
+                  const piggy = getPiggyBank(data, child.id);
+                  return (
+                    <div className="distribute-row" style={{background:"#fff1eb",border:"2px solid #fed7aa",borderRadius:12,marginBottom:10}}>
+                      <div style={{fontSize:"1.7rem"}}>🐷</div>
+                      <div className="distribute-info">
+                        <div style={{fontWeight:800}}>Piggy Bank</div>
+                        <div style={{fontSize:".78rem",color:"var(--orange)",fontWeight:700}}>Saved: {money(piggy.savedDollars,1,currency)} real money</div>
+                        <div style={{fontSize:".72rem",color:"var(--mid)",fontWeight:600}}>Points convert to {CURRENCIES.find(c=>c.code===currency)?.symbol||"$"} on deposit</div>
+                      </div>
+                      <input className="distribute-input" type="number" min="0" placeholder="0"
+                        style={{borderColor:"#fed7aa"}}
+                        value={distAmts["__piggy__"]||""} onChange={e=>setDistAmts(a=>({...a,__piggy__:e.target.value}))}/>
+                    </div>
+                  );
+                })()}
+                {myBanks.length===0&&!distAmts["__piggy__"]&&<div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No reward banks yet</div><div className="empty-sub">Ask a parent to set up savings banks!</div></div>}
                 {myBanks.map(bank=>{
                   const pct=Math.min(100,(bank.savedPoints/bank.costPoints)*100);
                   return(
@@ -2335,7 +2806,7 @@ export default function App() {
                     </div>
                   );
                 })}
-                {myBanks.length>0&&(
+                {(myBanks.length>0||(+distAmts["__piggy__"]||0)>0)&&(
                   <div style={{marginTop:14}}>
                     <div style={{marginBottom:10,fontWeight:700,color:"var(--mid)"}}>
                       Moving: {Object.values(distAmts).reduce((a,b)=>a+(+b||0),0)} pts · Wallet after: {child.walletPoints-Object.values(distAmts).reduce((a,b)=>a+(+b||0),0)} pts
@@ -2350,7 +2821,9 @@ export default function App() {
             {childTab==="banks"&&(
               <>
                 <div className="section-title">🏦 My Banks</div>
-                {myBanks.length===0&&<div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No banks yet</div></div>}
+                {/* Piggy bank always shown first */}
+                <PiggyBankCard childId={child.id} data={data} doUpdate={doUpdate} rate={rate} currency={currency}/>
+                {myBanks.length===0&&<div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No reward banks yet</div><div className="empty-sub">Ask a parent to set up savings goals!</div></div>}
                 <div className="card-grid">
                   {myBanks.map(bank=>{
                     const pct=Math.min(100,(bank.savedPoints/bank.costPoints)*100);
@@ -2455,8 +2928,17 @@ export default function App() {
 
                   {isEmpty&&<div className="empty"><div className="empty-icon">📋</div><div className="empty-text">No history yet</div><div className="empty-sub">Complete some chores to get started!</div></div>}
 
-                  {/* Bonus transactions */}
-                  {allTxs.filter(t=>t.type==="bonus").map(t=>(
+                  {/* Piggy bank transactions */}
+                  {allTxs.filter(t=>t.type==="piggy"||t.type==="payout").map(t=>(
+                    <div key={t.id} className="request-card" style={{borderLeftColor:"var(--orange)"}}>
+                      <div style={{fontSize:"1.8rem"}}>{t.type==="payout"?"💸":"🐷"}</div>
+                      <div className="request-info"><div style={{fontWeight:800}}>{t.label}</div><div style={{fontSize:".72rem",color:"var(--mid)"}}>{t.time}</div></div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontWeight:800,color:"var(--orange)"}}>{t.type==="payout"?"Paid out":"Saved"}</div>
+                        {t.points!==0&&<div style={{fontSize:".75rem",color:"var(--mid)",fontWeight:600}}>{Math.abs(t.points)} pts</div>}
+                      </div>
+                    </div>
+                  ))}
                     <div key={t.id} className="request-card" style={{borderLeftColor:"var(--amber)"}}>
                       <div style={{fontSize:"1.8rem"}}>⭐</div>
                       <div className="request-info">
@@ -2684,6 +3166,8 @@ export default function App() {
   // ══ PARENT ════════════════════════════════════════════════════════════════════
   if(screen==="parent"){
     const allPending=data.choreRequests.filter(r=>r.status==="pending");
+    const allPayouts=(data.payoutRequests||[]).filter(r=>r.status==="pending");
+    const totalPending=allPending.length+allPayouts.length;
     return(
       <>
         <style>{styles}</style>
@@ -2691,14 +3175,14 @@ export default function App() {
           <nav className="nav">
             <div className="nav-logo"><Av photo={activeUser.photo} emoji={activeUser.avatar||"👤"} size={30}/>{activeUser.name}</div>
             <div className="nav-right">
-              {allPending.length>0&&<span className="notif-dot">{allPending.length}</span>}
+              {totalPending>0&&<span className="notif-dot">{totalPending}</span>}
               <button className="nav-btn ghost" onClick={()=>setScreen("home")}>← Switch</button>
             </div>
           </nav>
           <div className="main">
             <div className="tabs">
               {[
-                ["approvals",`✅ Approvals${allPending.length>0?` (${allPending.length})`:""}`],
+                ["approvals",`✅ Approvals${totalPending>0?` (${totalPending})`:""}`],
                 ["calendar","📅 Calendar"],
                 ["chores","🧹 Chores"],
                 ["banks","🏦 Banks"],
@@ -2713,7 +3197,31 @@ export default function App() {
             {parentTab==="approvals"&&(
               <>
                 <div className="section-title">✅ Pending Approvals</div>
-                {allPending.length===0&&<div className="empty"><div className="empty-icon">🎉</div><div className="empty-text">All caught up!</div></div>}
+                {allPending.length===0&&(data.payoutRequests||[]).filter(r=>r.status==="pending").length===0&&<div className="empty"><div className="empty-icon">🎉</div><div className="empty-text">All caught up!</div></div>}
+                {/* Payout requests */}
+                {(data.payoutRequests||[]).filter(r=>r.status==="pending").map(req=>{
+                  const child=data.children.find(c=>c.id===req.childId);
+                  return(
+                    <div key={req.id} className="request-card" style={{borderLeftColor:"var(--orange)"}}>
+                      <div style={{fontSize:"2rem"}}>🐷</div>
+                      <div className="request-info">
+                        <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600,display:"flex",alignItems:"center",gap:5}}><Av photo={child?.photo} emoji={child?.avatar} size={16}/>{child?.name}</div>
+                        <div style={{fontWeight:800}}>Piggy Bank Payout Request</div>
+                        <div style={{fontWeight:900,color:"var(--orange)",fontSize:"1rem"}}>{money(req.amount,1,currency)}</div>
+                        {req.note&&<div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600}}>"{req.note}"</div>}
+                        <div style={{fontSize:".72rem",color:"var(--mid)"}}>{req.time} · <span className="status status-pending">pending</span></div>
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                        <button className="btn btn-green btn-sm" onClick={()=>doUpdate(d=>({...d,
+                          payoutRequests:(d.payoutRequests||[]).map(r=>r.id===req.id?{...r,status:"approved"}:r),
+                          piggyBanks:{...(d.piggyBanks||{}),[req.childId]:{...getPiggyBank(d,req.childId),savedDollars:Math.max(0,getPiggyBank(d,req.childId).savedDollars-req.amount)}},
+                          transactions:[{id:uid(),childId:req.childId,type:"payout",points:0,label:`💸 Payout: ${money(req.amount,1,currency)}`,time:now()},...d.transactions]
+                        }))}>✓ Pay Out</button>
+                        <button className="btn btn-red btn-sm" onClick={()=>doUpdate(d=>({...d,payoutRequests:(d.payoutRequests||[]).map(r=>r.id===req.id?{...r,status:"rejected"}:r)}))}>✗ Decline</button>
+                      </div>
+                    </div>
+                  );
+                })}
                 {allPending.map(req=>{const child=data.children.find(c=>c.id===req.childId);const chore=data.chores.find(c=>c.id===req.choreId);return<ApprovalCard key={req.id} req={req} child={child} chore={chore} rate={rate} currency={currency} onReview={()=>setApprovalModal({reqId:req.id})} readOnly={false}/>;  })}
                 {data.choreRequests.filter(r=>r.status!=="pending").length>0&&(<>
                   <div className="divider"/><div className="section-title">📋 Recent History</div>
@@ -2829,6 +3337,8 @@ export default function App() {
                         milestoneRewards={data.milestoneRewards||{}}
                         onSave={(childId,vals)=>doUpdate(d=>({...d,milestoneRewards:{...(d.milestoneRewards||{}),[childId]:vals}}))}
                       />
+                      {/* Piggy bank parent controls */}
+                      <PiggyParentPanel child={child} data={data} doUpdate={doUpdate} currency={currency} rate={rate}/>
                     </div>
                   );
                 })}
