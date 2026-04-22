@@ -847,6 +847,210 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
   );
 }
 
+// ─── HelpTab ──────────────────────────────────────────────────────────────────
+function HelpSection({ icon, title, children, color="#3b82f6" }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{background:"white",borderRadius:14,marginBottom:10,overflow:"hidden",boxShadow:"0 2px 12px rgba(0,0,0,.06)"}}>
+      <div onClick={()=>setOpen(o=>!o)}
+        style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",cursor:"pointer",userSelect:"none"}}>
+        <div style={{width:38,height:38,borderRadius:10,background:color+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.3rem",flexShrink:0}}>{icon}</div>
+        <div style={{flex:1,fontWeight:800,fontSize:".95rem"}}>{title}</div>
+        <div style={{fontSize:"1.1rem",color:"var(--mid)",transition:"transform .2s",transform:open?"rotate(180deg)":"rotate(0deg)"}}>⌄</div>
+      </div>
+      {open&&(
+        <div style={{padding:"0 18px 16px",borderTop:"1px solid #f1f5f9"}}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HelpStep({ num, text }) {
+  return (
+    <div style={{display:"flex",gap:10,alignItems:"flex-start",marginTop:10}}>
+      <div style={{width:24,height:24,borderRadius:"50%",background:"var(--blue)",color:"white",fontSize:".75rem",fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{num}</div>
+      <div style={{fontSize:".88rem",fontWeight:600,color:"var(--dark)",lineHeight:1.5}}>{text}</div>
+    </div>
+  );
+}
+
+function HelpTip({ text }) {
+  return (
+    <div style={{background:"var(--sky)",borderRadius:10,padding:"9px 12px",marginTop:10,fontSize:".82rem",fontWeight:700,color:"var(--blue)",lineHeight:1.5}}>
+      💡 {text}
+    </div>
+  );
+}
+
+function HelpBadge({ label, color }) {
+  return <span style={{display:"inline-block",borderRadius:20,padding:"2px 10px",fontSize:".75rem",fontWeight:800,background:color+"22",color:color,margin:"2px 3px 2px 0"}}>{label}</span>;
+}
+
+function HelpTab() {
+  return (
+    <div>
+      {/* Header card */}
+      <div style={{background:"linear-gradient(135deg,#667eea,#764ba2)",borderRadius:20,padding:"22px 20px",marginBottom:20,color:"white",position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:-30,right:-30,width:110,height:110,borderRadius:"50%",background:"rgba(255,255,255,.1)"}}/>
+        <div style={{fontSize:"2rem",marginBottom:6}}>❓</div>
+        <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.5rem",marginBottom:4}}>Help & Guide</div>
+        <div style={{fontSize:".85rem",opacity:.88,fontWeight:600,lineHeight:1.5}}>
+          Tap any section below to expand it. Each section explains a feature and how to use it.
+        </div>
+      </div>
+
+      {/* Quick start */}
+      <HelpSection icon="🚀" title="Quick Start — First Time Setup" color="#10b981">
+        <HelpStep num="1" text="Go to Settings → set your currency (e.g. AUD) and how much each point is worth (default 50¢)." />
+        <HelpStep num="2" text="Go to Children → edit the demo profiles or remove them and add your own kids. You can upload a photo or pick an emoji avatar." />
+        <HelpStep num="3" text="Go to Chores → add the chores your family does. Set the point value, whether a photo is required, and if it repeats." />
+        <HelpStep num="4" text="Go to Banks → for each child, create savings goals (e.g. Screen Time, New Toy). Set a point target and reward description." />
+        <HelpStep num="5" text="Optional: go to Calendar → set up your fortnight cycle if you have a split care arrangement." />
+        <HelpStep num="6" text="Share the app URL with your family. Kids tap their profile to log in and start claiming chores!" />
+        <HelpTip text="The default parent PIN is 1234. Change it in Settings → Edit Profile & PIN as soon as you're set up." />
+      </HelpSection>
+
+      {/* Approvals */}
+      <HelpSection icon="✅" title="Approvals — Reviewing Chore Requests" color="#f59e0b">
+        <div style={{fontSize:".88rem",color:"var(--mid)",fontWeight:600,marginTop:10,lineHeight:1.6}}>
+          When a child claims a chore, it appears here as a pending card. You must approve or reject it before any points are awarded.
+        </div>
+        <HelpStep num="1" text="Review the child's name, chore, and submission time." />
+        <HelpStep num="2" text="If a photo was required, tap 📸 View Photo to inspect their evidence." />
+        <HelpStep num="3" text='Tap "✓ Yes" to approve — points land in the child\'s wallet instantly.' />
+        <HelpStep num="4" text='Tap "✗ No" to reject — the child can submit again after fixing the issue.' />
+        <HelpTip text="The red dot on the Approvals tab tells you how many are waiting. Check it daily!" />
+      </HelpSection>
+
+      {/* Calendar */}
+      <HelpSection icon="📅" title="Calendar — Fortnight Schedule & Split Care" color="#8b5cf6">
+        <div style={{fontSize:".88rem",color:"var(--mid)",fontWeight:600,marginTop:10,lineHeight:1.6}}>
+          The calendar runs on a repeating 14-day cycle. Use it to mark which child is in your care on which days, and to assign chores to specific days.
+        </div>
+        <HelpStep num="1" text='Choose "Mon" or "Sun" for your week start day.' />
+        <HelpStep num="2" text="Pick any date in Week 1 of your care cycle. The calendar snaps to the nearest Monday/Sunday automatically — a green confirmation shows the exact start date." />
+        <HelpStep num="3" text="Tap any day cell to open the day panel. Toggle which children are in care that day using the green chips." />
+        <HelpStep num="4" text='In the day panel, tap "+ Assign Chore" to pin a specific chore to a specific child on that day. It will repeat every fortnight.' />
+        <HelpTip text="Children see their scheduled chores for today in their Schedule tab — they don't see the full calendar." />
+        <div style={{background:"var(--lavender)",borderRadius:10,padding:"10px 12px",marginTop:10,fontSize:".82rem",fontWeight:700,color:"var(--purple)",lineHeight:1.5}}>
+          <strong>Split care example:</strong> Mark Week 1 all days for Child A, Week 2 all days for Child B — then assign each child's chores to their respective week.
+        </div>
+      </HelpSection>
+
+      {/* Chores */}
+      <HelpSection icon="🧹" title="Chores — Creating & Managing Chores" color="#f97316">
+        <div style={{fontSize:".88rem",color:"var(--mid)",fontWeight:600,marginTop:10,lineHeight:1.6}}>
+          Chores are the tasks children complete to earn points. All chores are available to all children by default — use the Calendar to assign specific ones to specific days/kids.
+        </div>
+        <div style={{marginTop:12,marginBottom:4,fontWeight:800,fontSize:".85rem"}}>When adding a chore:</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
+          <HelpBadge label="Icon 🍽️" color="#f97316"/>
+          <HelpBadge label="Points value" color="#f59e0b"/>
+          <HelpBadge label="🔄 Recurring or 🎯 One-off" color="#10b981"/>
+          <HelpBadge label="📸 Photo required?" color="#3b82f6"/>
+        </div>
+        <HelpTip text="Use Photo Required for chores like 'Clean Bedroom' where a quick snap keeps everyone honest. Skip it for simpler tasks." />
+      </HelpSection>
+
+      {/* Banks */}
+      <HelpSection icon="🏦" title="Banks — Savings Goals for Each Child" color="#8b5cf6">
+        <div style={{fontSize:".88rem",color:"var(--mid)",fontWeight:600,marginTop:10,lineHeight:1.6}}>
+          Banks are where children save their points toward rewards. Each child has their own banks. There are two types:
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",margin:"10px 0"}}>
+          <div style={{background:"var(--mint)",borderRadius:10,padding:"8px 12px",flex:1,minWidth:140}}>
+            <div style={{fontWeight:800,fontSize:".82rem",color:"#065f46"}}>🔄 Recurring</div>
+            <div style={{fontSize:".78rem",color:"#065f46",marginTop:3,fontWeight:600}}>Redeems and resets. E.g. "5 pts = 15 min screen time" — can be redeemed repeatedly.</div>
+          </div>
+          <div style={{background:"var(--lavender)",borderRadius:10,padding:"8px 12px",flex:1,minWidth:140}}>
+            <div style={{fontWeight:800,fontSize:".82rem",color:"var(--purple)"}}>🎯 One-off Goal</div>
+            <div style={{fontSize:".78rem",color:"var(--purple)",marginTop:3,fontWeight:600}}>A single savings target. E.g. "40 pts = new LEGO set". Completes once and empties.</div>
+          </div>
+        </div>
+        <HelpTip text="Give each child at least one recurring bank AND one goal bank. This creates the spend-vs-save tension that teaches real financial thinking." />
+      </HelpSection>
+
+      {/* Children */}
+      <HelpSection icon="👦" title="Children — Managing Profiles & PINs" color="#10b981">
+        <div style={{fontSize:".88rem",color:"var(--mid)",fontWeight:600,marginTop:10,lineHeight:1.6}}>
+          Each child has their own profile, wallet, and bank set.
+        </div>
+        <HelpStep num="1" text='Tap "✏️ Edit / Manage PIN" on any child card to change their name, avatar, or PIN.' />
+        <HelpStep num="2" text='Tap "🎁 Gift Points" to inject bonus points — great for birthdays or rewarding great behaviour. Add a note so the child knows why.' />
+        <HelpStep num="3" text="To reset a forgotten PIN: go to Children → Edit → set a new PIN for them." />
+        <HelpStep num="4" text='To remove a PIN entirely: go to Edit → tap "Remove PIN". The child will log in without a PIN.' />
+        <HelpTip text="Younger kids work well without a PIN. Older kids enjoy having their own secure account." />
+      </HelpSection>
+
+      {/* Point system */}
+      <HelpSection icon="⭐" title="Points & Money — How the System Works" color="#f59e0b">
+        <div style={{fontSize:".88rem",color:"var(--mid)",fontWeight:600,marginTop:10,lineHeight:1.6}}>
+          Points flow through the app in four stages:
+        </div>
+        {[
+          ["Complete chore → Submit","Child claims a chore and submits it (with photo if required)"],
+          ["Parent approves","Points are added to the child's wallet instantly"],
+          ["Child distributes","Child moves points from wallet into savings banks"],
+          ["Redeem reward","When a bank reaches its target, child redeems the reward"],
+        ].map(([step,desc],i)=>(
+          <div key={i} style={{display:"flex",gap:10,marginTop:10,alignItems:"flex-start"}}>
+            <div style={{width:24,height:24,borderRadius:"50%",background:"var(--amber)",color:"white",fontSize:".72rem",fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{i+1}</div>
+            <div>
+              <div style={{fontWeight:800,fontSize:".85rem"}}>{step}</div>
+              <div style={{fontSize:".8rem",color:"var(--mid)",fontWeight:600,marginTop:2}}>{desc}</div>
+            </div>
+          </div>
+        ))}
+        <HelpTip text="The point value is set in Settings. Start at 50¢ per point and adjust as kids grow. This is a great teaching moment about wages and purchasing power." />
+      </HelpSection>
+
+      {/* Financial literacy */}
+      <HelpSection icon="💡" title="Teaching Money Values — The Inspiration Feature" color="#10b981">
+        <div style={{fontSize:".88rem",color:"var(--mid)",fontWeight:600,marginTop:10,lineHeight:1.6}}>
+          ChoreChart has a built-in financial literacy feature that helps kids understand the cost of impulse spending.
+        </div>
+        <div style={{background:"#fef3c7",borderRadius:10,padding:"10px 12px",marginTop:10,fontSize:".82rem",fontWeight:700,color:"#92400e",lineHeight:1.5}}>
+          <strong>On recurring bank cards:</strong> After the first redemption, a yellow tally box shows total points and dollars spent on that reward — and how far that money would have taken them toward a savings goal.
+        </div>
+        <div style={{background:"var(--mint)",borderRadius:10,padding:"10px 12px",marginTop:8,fontSize:".82rem",fontWeight:700,color:"#065f46",lineHeight:1.5}}>
+          <strong>At redemption time:</strong> Before confirming, children see a nudge screen showing their running tally and a progress bar: "If you saved this instead, you'd be 67% of the way to your New Bike 🚲"
+        </div>
+        <HelpTip text="This works best when each child has both a recurring bank (e.g. Screen Time) and a goal bank (e.g. New Toy). The contrast between the two is the lesson." />
+      </HelpSection>
+
+      {/* Settings */}
+      <HelpSection icon="⚙️" title="Settings — Currency, PINs & Parents" color="#64748b">
+        <div style={{fontSize:".88rem",color:"var(--mid)",fontWeight:600,marginTop:10,lineHeight:1.6}}>
+          The Settings tab has three areas:
+        </div>
+        <div style={{marginTop:10}}>
+          <div style={{fontWeight:800,fontSize:".85rem",marginBottom:4}}>💰 Currency & Point Value</div>
+          <div style={{fontSize:".82rem",color:"var(--mid)",fontWeight:600,lineHeight:1.5}}>Choose from 20 currencies (AUD, USD, GBP, EUR, NZD and more). Set how much each point is worth. All money values update instantly across the whole app.</div>
+        </div>
+        <div style={{marginTop:10}}>
+          <div style={{fontWeight:800,fontSize:".85rem",marginBottom:4}}>👤 Parent Accounts</div>
+          <div style={{fontSize:".82rem",color:"var(--mid)",fontWeight:600,lineHeight:1.5}}>Add multiple parents — each with their own name, avatar (photo or emoji), and PIN. Edit your name or change your PIN at any time. You'll need your current PIN to set a new one.</div>
+        </div>
+        <div style={{marginTop:10}}>
+          <div style={{fontWeight:800,fontSize:".85rem",marginBottom:4}}>📊 Family Stats</div>
+          <div style={{fontSize:".82rem",color:"var(--mid)",fontWeight:600,lineHeight:1.5}}>A quick summary of total children, chores, and approved completions.</div>
+        </div>
+        <HelpTip text="Change the default PIN (1234) as soon as you set up the app so your kids can't sneak into the parent portal!" />
+      </HelpSection>
+
+      {/* Data note */}
+      <div style={{background:"#fef3c7",borderRadius:14,padding:"14px 16px",marginTop:6,marginBottom:20}}>
+        <div style={{fontWeight:800,fontSize:".88rem",color:"#92400e",marginBottom:4}}>📱 Data & Syncing</div>
+        <div style={{fontSize:".82rem",color:"#92400e",fontWeight:600,lineHeight:1.6}}>
+          Currently, data is stored on each device separately. If you approve a chore on your phone, your child won't see it on a different device until a shared database is connected. A cloud sync upgrade is planned for a future update.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [data,setData]             = useState(loadData);
@@ -1308,6 +1512,7 @@ export default function App() {
                 ["banks","🏦 Banks"],
                 ["children","👦 Children"],
                 ["settings","⚙️ Settings"],
+                ["help","❓ Help"],
               ].map(([t,l])=><button key={t} className={`tab ${parentTab===t?"active":""}`} onClick={()=>setParentTab(t)} style={{fontSize:".74rem"}}>{l}</button>)}
             </div>
 
@@ -1504,6 +1709,9 @@ export default function App() {
                 </div>
               </>
             )}
+
+            {/* HELP */}
+            {parentTab==="help"&&<HelpTab />}
           </div>
         </div>
 
