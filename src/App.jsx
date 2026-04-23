@@ -341,9 +341,116 @@ const styles = `
 
   /* value badge */
   .val-badge{display:inline-flex;align-items:center;gap:4px;background:var(--yellow);color:#92400e;border-radius:20px;padding:2px 9px;font-size:.75rem;font-weight:800;}
+
+  /* Confetti */
+  .confetti-canvas{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9999;}
+  .celebration-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:9998;pointer-events:none;}
+  .celebration-card{background:white;border-radius:24px;padding:32px 28px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.2);animation:celebPop .4s cubic-bezier(.34,1.56,.64,1);}
+  @keyframes celebPop{from{transform:scale(.5);opacity:0;}to{transform:scale(1);opacity:1;}}
 `;
 
-// ─── PIN Modals ───────────────────────────────────────────────────────────────
+// ─── Colour Themes ────────────────────────────────────────────────────────────
+const THEMES = [
+  { id:"ocean",  name:"Ocean Blue",  emoji:"🌊", desc:"Cool blues — the default",
+    vars:{"--sky":"#e0f2fe","--blue":"#3b82f6","--green":"#10b981","--purple":"#8b5cf6","--amber":"#f59e0b","--bg1":"#e0f2fe","--bg2":"#ede9fe","--acc1":"#667eea","--acc2":"#764ba2"} },
+  { id:"sunset", name:"Sunset",      emoji:"🌅", desc:"Warm oranges and pinks",
+    vars:{"--sky":"#fff1f2","--blue":"#f43f5e","--green":"#fb923c","--purple":"#e11d48","--amber":"#f97316","--bg1":"#fff7ed","--bg2":"#fff1f2","--acc1":"#f43f5e","--acc2":"#f97316"} },
+  { id:"forest", name:"Forest",      emoji:"🌲", desc:"Earthy greens and gold",
+    vars:{"--sky":"#f0fdf4","--blue":"#16a34a","--green":"#15803d","--purple":"#65a30d","--amber":"#ca8a04","--bg1":"#f0fdf4","--bg2":"#fef9c3","--acc1":"#16a34a","--acc2":"#65a30d"} },
+  { id:"galaxy", name:"Galaxy",      emoji:"🌌", desc:"Deep purples, dark mode",
+    vars:{"--sky":"#13111c","--blue":"#a78bfa","--green":"#34d399","--purple":"#c084fc","--amber":"#fbbf24","--dark":"#f1f5f9","--mid":"#94a3b8","--white":"#1e1b4b","--bg1":"#13111c","--bg2":"#1e1b4b","--acc1":"#a78bfa","--acc2":"#c084fc"} },
+  { id:"candy",  name:"Candy",       emoji:"🍭", desc:"Bright, fun pastels",
+    vars:{"--sky":"#fdf4ff","--blue":"#d946ef","--green":"#06b6d4","--purple":"#7c3aed","--amber":"#f59e0b","--bg1":"#fdf4ff","--bg2":"#ecfeff","--acc1":"#d946ef","--acc2":"#06b6d4"} },
+  { id:"mono",   name:"Monochrome",  emoji:"🖤", desc:"Clean, minimal greys",
+    vars:{"--sky":"#f8fafc","--blue":"#334155","--green":"#475569","--purple":"#1e293b","--amber":"#64748b","--bg1":"#f8fafc","--bg2":"#f1f5f9","--acc1":"#334155","--acc2":"#475569"} },
+];
+
+function getThemeStyles(themeId) {
+  const t = THEMES.find(x=>x.id===themeId)||THEMES[0];
+  const v = Object.entries(t.vars).map(([k,v])=>`${k}:${v}`).join(";");
+  return `:root{${v}}
+    body{background:var(--bg1,var(--sky));}
+    .screen-select{background:linear-gradient(160deg,var(--bg1,#e0f2fe) 0%,var(--bg2,#ede9fe) 100%)!important;}
+    .wallet-card{background:linear-gradient(135deg,var(--acc1,#667eea),var(--acc2,#764ba2))!important;}
+    .tab.active{background:var(--blue)!important;}
+    .btn-blue{background:var(--blue)!important;}
+    .btn-green{background:var(--green)!important;}
+    .btn-purple{background:var(--purple)!important;}
+    .bank-progress-fill{background:linear-gradient(90deg,var(--blue),var(--purple))!important;}
+    .child-pill.active{border-color:var(--blue)!important;color:var(--blue)!important;background:var(--sky)!important;}
+    .pin-dot.filled{background:var(--blue)!important;}
+    .profile-card:hover{border-color:var(--blue)!important;}
+    .nav-logo{color:var(--blue)!important;}
+    .nav-badge{color:var(--blue)!important;}
+  `;
+}
+
+// ─── Confetti Component ───────────────────────────────────────────────────────
+function Confetti({ message, emoji, onDone }) {
+  const canvasRef = useRef(null);
+  const timerRef  = useRef(null);
+  if (!timerRef.current) {
+    timerRef.current = setTimeout(onDone, 3200);
+  }
+
+  // Use useRef + useEffect pattern via raw JS since we can't import useEffect separately
+  // Kick off animation after mount
+  const startedRef = useRef(false);
+  const rafRef = useRef(null);
+
+  const animate = (canvas) => {
+    if (!canvas || startedRef.current) return;
+    startedRef.current = true;
+    const ctx = canvas.getContext("2d");
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const colors = ["#f43f5e","#f97316","#f59e0b","#10b981","#3b82f6","#8b5cf6","#ec4899","#06b6d4"];
+    const pieces = Array.from({length:120},()=>({
+      x: Math.random()*canvas.width,
+      y: -20 - Math.random()*100,
+      w: 8+Math.random()*8,
+      h: 4+Math.random()*4,
+      color: colors[Math.floor(Math.random()*colors.length)],
+      rot: Math.random()*360,
+      vx: (Math.random()-0.5)*3,
+      vy: 2+Math.random()*4,
+      vr: (Math.random()-0.5)*8,
+    }));
+    let frame = 0;
+    const tick = () => {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      pieces.forEach(p=>{
+        p.x+=p.vx; p.y+=p.vy; p.rot+=p.vr; p.vy+=0.05;
+        ctx.save();
+        ctx.translate(p.x,p.y);
+        ctx.rotate(p.rot*Math.PI/180);
+        ctx.fillStyle=p.color;
+        ctx.globalAlpha=Math.max(0,1-(frame/90));
+        ctx.fillRect(-p.w/2,-p.h/2,p.w,p.h);
+        ctx.restore();
+      });
+      frame++;
+      if(frame<100) rafRef.current=requestAnimationFrame(tick);
+      else ctx.clearRect(0,0,canvas.width,canvas.height);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  };
+
+  return (
+    <>
+      <canvas ref={el=>{canvasRef.current=el;if(el)animate(el);}} className="confetti-canvas"/>
+      <div className="celebration-overlay">
+        <div className="celebration-card" onClick={onDone} style={{cursor:"pointer"}}>
+          <div style={{fontSize:"4rem",marginBottom:8,lineHeight:1}}>{emoji||"🎉"}</div>
+          <div style={{fontFamily:"'Fredoka One',cursive",fontSize:"1.6rem",color:"var(--dark)",marginBottom:6}}>{message||"Amazing!"}</div>
+          <div style={{fontSize:".85rem",color:"var(--mid)",fontWeight:600}}>Tap to continue</div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+
 function PinModal({ user, onSuccess, onCancel }) {
   const [pin,setPin]=useState(""); const [err,setErr]=useState(false);
   const press=k=>{
@@ -474,8 +581,8 @@ function AddChoreModal({ children, onSave, onClose }) {
 }
 
 // ─── AddBankModal ─────────────────────────────────────────────────────────────
-function AddBankModal({ childId, onSave, onClose }) {
-  const [f,setF]=useState({name:"",icon:"🏦",type:"recurring",costPoints:5,reward:""});
+function AddBankModal({ childId, onSave, onClose, rate, currency }) {
+  const [f,setF]=useState({name:"",icon:"🏦",type:"recurring",targetDollars:"",reward:""});
   const [customBankIcon,setCustomBankIcon]=useState("");
   const bankIconCats=[
     {label:"Tech & Fun",   icons:["📱","🎮","🎬","🎧","💻","🕹️","📺","🎙️","📷","🔋"]},
@@ -487,6 +594,14 @@ function AddBankModal({ childId, onSave, onClose }) {
     {label:"Goals",        icons:["⭐","🏆","🎯","💰","🐷","🏦","💎","🌟","🚀","❤️"]},
   ];
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const costPoints = f.targetDollars ? Math.max(1,Math.round(+f.targetDollars / (rate||0.5))) : 0;
+  const sym = CURRENCIES.find(c=>c.code===currency)?.symbol||"$";
+
+  const handleSave = () => {
+    if (!f.name||!f.reward||!f.targetDollars) return;
+    onSave({...f, costPoints, childId, savedPoints:0});
+  };
+
   return(
     <div className="modal-overlay"><div className="modal">
       <div className="modal-title">🏦 New Savings Bank</div>
@@ -522,9 +637,18 @@ function AddBankModal({ childId, onSave, onClose }) {
         </div>
       </div>
       <div className="form-group"><label className="form-label">Bank Name</label><input className="form-input" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Screen Time"/></div>
-      <div className="form-group"><label className="form-label">Reward</label><input className="form-input" value={f.reward} onChange={e=>set("reward",e.target.value)} placeholder="e.g. 15 min screen time"/></div>
+      <div className="form-group"><label className="form-label">Reward Description</label><input className="form-input" value={f.reward} onChange={e=>set("reward",e.target.value)} placeholder="e.g. 15 min screen time"/></div>
       <div className="form-row">
-        <div className="form-group mb-0"><label className="form-label">Points Needed</label><input className="form-input" type="number" min="1" value={f.costPoints} onChange={e=>set("costPoints",+e.target.value)}/></div>
+        <div className="form-group mb-0">
+          <label className="form-label">Savings Target ({sym})</label>
+          <input className="form-input" type="number" min="0.50" step="0.50" placeholder={`e.g. ${sym}5.00`}
+            value={f.targetDollars} onChange={e=>set("targetDollars",e.target.value)}/>
+          {costPoints>0&&(
+            <div style={{fontSize:".75rem",color:"var(--purple)",fontWeight:700,marginTop:4}}>
+              = {costPoints} pts to earn
+            </div>
+          )}
+        </div>
         <div className="form-group mb-0"><label className="form-label">Type</label>
           <select className="form-input" value={f.type} onChange={e=>set("type",e.target.value)}>
             <option value="recurring">🔄 Recurring</option>
@@ -532,8 +656,13 @@ function AddBankModal({ childId, onSave, onClose }) {
           </select>
         </div>
       </div>
+      {f.targetDollars>0&&(
+        <div style={{background:"var(--sky)",borderRadius:10,padding:"9px 12px",marginTop:4,fontSize:".8rem",fontWeight:700,color:"var(--blue)"}}>
+          💡 At {sym}{(rate||0.5).toFixed(2)} per point, {costPoints} completed chore-points = {sym}{(+f.targetDollars).toFixed(2)}
+        </div>
+      )}
       <div style={{display:"flex",gap:8,marginTop:14}}>
-        <button className="btn btn-purple" style={{flex:1}} onClick={()=>f.name&&f.reward&&onSave({...f,childId,savedPoints:0})}>Save Bank</button>
+        <button className="btn btn-purple" style={{flex:1}} onClick={handleSave}>Save Bank</button>
         <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
       </div>
     </div></div>
@@ -1388,6 +1517,7 @@ function SetupWizard({ onComplete }) {
   const [hasSplitCare, setHasSplitCare] = useState(null);
   const [calStartDay, setCalStartDay] = useState("Mon");
   const [calAnchor, setCalAnchor]   = useState("");
+  const [wizardTheme, setWizardTheme] = useState("ocean");
 
   const avatarList = ["🦁","🐯","🦊","🐨","🐼","🐸","🦄","🐙","🦋","🐬","🦖","🐧","🦅","🐻","🦝"];  const setKid = (i, k, v) => setKids(arr => arr.map((c,idx)=>idx===i?{...c,[k]:v}:c));
 
@@ -1463,6 +1593,7 @@ function SetupWizard({ onComplete }) {
         calendarStartDay: calStartDay,
         fortnightStart: hasSplitCare && snappedAnchor ? snappedAnchor.toISOString().split("T")[0] : null,
         familyName: familyName.trim(),
+        theme: wizardTheme,
         setupComplete: true,
       },
     };
@@ -1649,6 +1780,7 @@ function SetupWizard({ onComplete }) {
   return (
     <>
       <style>{styles}</style>
+      <style>{themeStyle}</style>
       <div style={wrapStyle}>
         {/* Logo */}
         <div style={{textAlign:"center",marginBottom:24}}>
@@ -1807,6 +1939,20 @@ function SetupWizard({ onComplete }) {
                   value={pointVal} onChange={e=>setPointVal(+e.target.value)}/>
                 <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600,marginTop:6}}>
                   10 chore points = {CURRENCIES.find(c=>c.code===currency2)?.symbol}{(10*pointVal).toFixed(2)} in real money
+                </div>
+              </div>
+              <div className="form-group" style={{marginTop:16}}>
+                <label className="form-label">🎨 Choose your colour theme</label>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:6}}>
+                  {THEMES.map(t=>(
+                    <div key={t.id} onClick={()=>setWizardTheme(t.id)}
+                      style={{padding:"10px 8px",borderRadius:12,cursor:"pointer",textAlign:"center",
+                        border:wizardTheme===t.id?"3px solid #3b82f6":"2px solid #e2e8f0",
+                        background:wizardTheme===t.id?"#eff6ff":"#f8fafc",transition:"all .15s"}}>
+                      <div style={{fontSize:"1.6rem",marginBottom:3}}>{t.emoji}</div>
+                      <div style={{fontWeight:800,fontSize:".75rem",color:wizardTheme===t.id?"#3b82f6":"var(--dark)"}}>{t.name}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
               <NavButtons/>
@@ -2450,8 +2596,13 @@ export default function App() {
 
   const rate = data.settings?.pointValue || 0.5;
   const currency = data.settings?.currency || "AUD";
+  const themeId = data.settings?.theme || "ocean";
+  const themeStyle = getThemeStyles(themeId);
 
-  // Show setup wizard if first launch (no setupComplete flag and no real children)
+  // celebration: { message, emoji } | null
+  const [celebration, setCelebration] = useState(null);
+  const celebrate = (message, emoji) => setCelebration({message, emoji});
+
   const needsSetup = !data.settings?.setupComplete && data.children.every(c=>c.id==="c1"||c.id==="c2");
 
   if(needsSetup) return (
@@ -2497,20 +2648,22 @@ export default function App() {
     setModal(null);setClaimChore(null);setClaimPhoto(null);
   };
 
-  const handleApprove=(reqId, bonusPts=0, note="")=>doUpdate(d=>{
-    const req=d.choreRequests.find(r=>r.id===reqId);
-    const chore=d.chores.find(c=>c.id===req?.choreId);
-    if(!req||!chore)return d;
-    const total=chore.points+(+bonusPts||0);
-    const txs=[{id:uid(),childId:req.childId,type:"earn",points:chore.points,label:chore.title,choreId:chore.id,time:now()}];
-    if(+bonusPts>0) txs.push({id:uid(),childId:req.childId,type:"bonus",points:+bonusPts,label:`⭐ Bonus: ${note||"Great effort!"}`,time:now()});
-    const newData={...d,
-      choreRequests:d.choreRequests.map(r=>r.id===reqId?{...r,status:"approved",note,bonusPts:+bonusPts||0}:r),
-      children:d.children.map(c=>c.id===req.childId?{...c,walletPoints:c.walletPoints+total}:c),
-      transactions:[...txs,...d.transactions]
-    };
-    return checkAchievements(newData, req.childId);
-  });
+  const handleApprove=(reqId, bonusPts=0, note="")=>{
+    doUpdate(d=>{
+      const req=d.choreRequests.find(r=>r.id===reqId);
+      const chore=d.chores.find(c=>c.id===req?.choreId);
+      if(!req||!chore)return d;
+      const total=chore.points+(+bonusPts||0);
+      const txs=[{id:uid(),childId:req.childId,type:"earn",points:chore.points,label:chore.title,choreId:chore.id,time:now()}];
+      if(+bonusPts>0) txs.push({id:uid(),childId:req.childId,type:"bonus",points:+bonusPts,label:`⭐ Bonus: ${note||"Great effort!"}`,time:now()});
+      const newData={...d,
+        choreRequests:d.choreRequests.map(r=>r.id===reqId?{...r,status:"approved",note,bonusPts:+bonusPts||0}:r),
+        children:d.children.map(c=>c.id===req.childId?{...c,walletPoints:c.walletPoints+total}:c),
+        transactions:[...txs,...d.transactions]
+      };
+      return checkAchievements(newData, req.childId);
+    });
+  };
   const handleReject=(reqId,note="")=>doUpdate(d=>({...d,choreRequests:d.choreRequests.map(r=>r.id===reqId?{...r,status:"rejected",note}:r)}));
 
   const handleDistribute=()=>{
@@ -2546,6 +2699,7 @@ export default function App() {
       },...d.transactions]
     }));
     setRedeemNudge(null);
+    celebrate(`You redeemed ${bank.name}!`, bank.icon||"🎉");
   };
 
   const handleGift=()=>{
@@ -2560,6 +2714,7 @@ export default function App() {
   if(screen==="home") return(
     <>
       <style>{styles}</style>
+      <style>{themeStyle}</style>
       <div className="screen-select">
         <div style={{textAlign:"center"}}>
           <div style={{fontSize:"3.5rem",marginBottom:6}}>⭐</div>
@@ -2597,6 +2752,7 @@ export default function App() {
     return(
       <>
         <style>{styles}</style>
+      <style>{themeStyle}</style>
         <div className="app">
           <nav className="nav">
             <div className="nav-logo"><Av photo={child.photo} emoji={child.avatar} size={30}/>{child.name}</div>
@@ -2939,6 +3095,8 @@ export default function App() {
                       </div>
                     </div>
                   ))}
+                  {/* Bonus transactions */}
+                  {allTxs.filter(t=>t.type==="bonus").map(t=>(
                     <div key={t.id} className="request-card" style={{borderLeftColor:"var(--amber)"}}>
                       <div style={{fontSize:"1.8rem"}}>⭐</div>
                       <div className="request-info">
@@ -3171,6 +3329,7 @@ export default function App() {
     return(
       <>
         <style>{styles}</style>
+      <style>{themeStyle}</style>
         <div className="app">
           <nav className="nav">
             <div className="nav-logo"><Av photo={activeUser.photo} emoji={activeUser.avatar||"👤"} size={30}/>{activeUser.name}</div>
@@ -3349,6 +3508,23 @@ export default function App() {
             {parentTab==="settings"&&(
               <>
                 {/* Point value editor */}
+                <div className="section-title">🎨 Colour Theme</div>
+                <div className="card" style={{marginBottom:20}}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:8}}>
+                    {THEMES.map(t=>(
+                      <div key={t.id} onClick={()=>doUpdate(d=>({...d,settings:{...d.settings,theme:t.id}}))}
+                        style={{padding:"12px 10px",borderRadius:12,cursor:"pointer",textAlign:"center",
+                          border:themeId===t.id?"3px solid var(--blue)":"2px solid #e2e8f0",
+                          background:themeId===t.id?"var(--sky)":"#f8fafc",transition:"all .15s"}}>
+                        <div style={{fontSize:"1.8rem",marginBottom:4}}>{t.emoji}</div>
+                        <div style={{fontWeight:800,fontSize:".82rem",color:themeId===t.id?"var(--blue)":"var(--dark)"}}>{t.name}</div>
+                        <div style={{fontSize:".7rem",color:"var(--mid)",fontWeight:600,marginTop:2}}>{t.desc}</div>
+                        {themeId===t.id&&<div style={{fontSize:".72rem",color:"var(--blue)",fontWeight:800,marginTop:4}}>✓ Active</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="section-title">💰 Currency & Point Value</div>
                 <div className="card" style={{marginBottom:20}}>
                   {/* Currency selector */}
@@ -3438,7 +3614,7 @@ export default function App() {
             onClose={()=>setApprovalModal(null)}/> : null;
         })()}
         {modal==="addChore"&&<AddChoreModal children={data.children} onSave={f=>{doUpdate(d=>({...d,chores:[...d.chores,{...f,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
-        {modal==="addBank"&&selChild&&<AddBankModal childId={selChild} onSave={b=>{doUpdate(d=>({...d,banks:[...d.banks,{...b,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
+        {modal==="addBank"&&selChild&&<AddBankModal childId={selChild} rate={rate} currency={currency} onSave={b=>{doUpdate(d=>({...d,banks:[...d.banks,{...b,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
         {modal==="addChild"&&<AddChildModal onSave={c=>{doUpdate(d=>({...d,children:[...d.children,{...c,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
         {modal==="addParent"&&<AddParentModal onSave={p=>{doUpdate(d=>({...d,parents:[...d.parents,{...p,id:uid()}]}));setModal(null);}} onClose={()=>setModal(null)}/>}
 
@@ -3471,5 +3647,18 @@ export default function App() {
       </>
     );
   }
+  // Global confetti overlay — renders on top of any screen
+  if (celebration) return (
+    <>
+      <style>{styles}</style>
+      <style>{themeStyle}</style>
+      <Confetti
+        message={celebration.message}
+        emoji={celebration.emoji}
+        onDone={()=>setCelebration(null)}
+      />
+    </>
+  );
+
   return null;
 }
