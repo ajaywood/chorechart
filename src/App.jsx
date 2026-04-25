@@ -387,20 +387,16 @@ function getThemeStyles(themeId) {
 
 // ─── Confetti Component ───────────────────────────────────────────────────────
 function Confetti({ message, emoji, onDone }) {
-  const canvasRef = useRef(null);
-  const timerRef  = useRef(null);
-  if (!timerRef.current) {
-    timerRef.current = setTimeout(onDone, 3200);
-  }
-
-  // Use useRef + useEffect pattern via raw JS since we can't import useEffect separately
-  // Kick off animation after mount
   const startedRef = useRef(false);
-  const rafRef = useRef(null);
+  const rafRef     = useRef(null);
 
-  const animate = (canvas) => {
+  const startAnimation = (canvas) => {
     if (!canvas || startedRef.current) return;
     startedRef.current = true;
+
+    // Auto-dismiss after 3.2s
+    setTimeout(onDone, 3200);
+
     const ctx = canvas.getContext("2d");
     canvas.width  = window.innerWidth;
     canvas.height = window.innerHeight;
@@ -438,7 +434,7 @@ function Confetti({ message, emoji, onDone }) {
 
   return (
     <>
-      <canvas ref={el=>{canvasRef.current=el;if(el)animate(el);}} className="confetti-canvas"/>
+      <canvas ref={el=>startAnimation(el)} className="confetti-canvas"/>
       <div className="celebration-overlay">
         <div className="celebration-card" onClick={onDone} style={{cursor:"pointer"}}>
           <div style={{fontSize:"4rem",marginBottom:8,lineHeight:1}}>{emoji||"🎉"}</div>
@@ -1749,6 +1745,7 @@ function SetupWizard({ onComplete }) {
   // Step styles
   const wrapStyle = { minHeight:"100vh", background:"linear-gradient(160deg,#e0f2fe 0%,#ede9fe 100%)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"flex-start", padding:"32px 20px 60px" };
   const cardStyle = { background:"white", borderRadius:20, padding:"28px 24px", width:"100%", maxWidth:500, boxShadow:"0 8px 40px rgba(0,0,0,.12)" };
+  const themeStyle = getThemeStyles(wizardTheme);
 
   const ProgressBar = () => (
     <div style={{width:"100%",maxWidth:500,marginBottom:20}}>
@@ -3416,7 +3413,13 @@ export default function App() {
                         {chore.requiresPhoto&&<span className="tag tag-photo">📸 Photo</span>}
                         <span className={`tag ${chore.recurring?"tag-recurring":"tag-oneoff"}`}>{chore.recurring?"🔄":"🎯"}</span>
                       </div>
-                      <button className="btn btn-red btn-sm" onClick={()=>doUpdate(d=>({...d,chores:d.chores.filter(c=>c.id!==chore.id)}))}>🗑 Remove</button>
+                      <div style={{display:"flex",gap:6}}>
+                        <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>{
+                          const newPts=prompt(`How many points should "${chore.title}" be worth?`, chore.points);
+                          if(newPts!==null && +newPts>0) doUpdate(d=>({...d,chores:d.chores.map(c=>c.id===chore.id?{...c,points:+newPts}:c)}));
+                        }}>✏️ Edit pts</button>
+                        <button className="btn btn-red btn-sm" onClick={()=>doUpdate(d=>({...d,chores:d.chores.filter(c=>c.id!==chore.id)}))}>🗑</button>
+                      </div>
                     </div>
                   ))}
                 </div>
