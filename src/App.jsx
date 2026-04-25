@@ -906,7 +906,7 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
     // Child view — show today's scheduled chores
     return (
       <div>
-        <div className="section-title">📅 Today's Scheduled Chores</div>
+        <div className="section-title">📅 Scheduled Chores for Today</div>
         {!settings.fortnightStart && (
           <div className="empty"><div className="empty-icon">📅</div><div className="empty-text">Calendar not set up yet</div><div className="empty-sub">Ask a parent to set up the calendar.</div></div>
         )}
@@ -1072,7 +1072,7 @@ function CalendarView({ data, doUpdate, isParent, activeChildId }) {
               </select>
             </div>
             <div style={{ background:"var(--sky)", borderRadius:10, padding:10, fontSize:".82rem", fontWeight:700, color:"var(--blue)", marginBottom:14 }}>
-              This chore will appear in {children.find(c=>c.id===choreChild)?.name}'s schedule every fortnight on this day.
+              This chore will appear in {children.find(c=>c.id===choreChild)?.name} schedule every fortnight on this day.
             </div>
             <div style={{ display:"flex", gap:8 }}>
               <button className="btn btn-teal" style={{ flex:1 }} onClick={addChoreToSlot}>Assign Chore</button>
@@ -2321,7 +2321,7 @@ function HelpTab() {
         </div>
         <div style={{marginTop:10}}>
           <div style={{fontWeight:800,fontSize:".85rem",marginBottom:4}}>👤 Parent Accounts</div>
-          <div style={{fontSize:".82rem",color:"var(--mid)",fontWeight:600,lineHeight:1.5}}>Add multiple parents — each with their own name, avatar (photo or emoji), and PIN. Edit your name or change your PIN at any time. You'll need your current PIN to set a new one.</div>
+          <div style={{fontSize:".82rem",color:"var(--mid)",fontWeight:600,lineHeight:1.5}}>Add multiple parents — each with a name, avatar (photo or emoji), and PIN. Edit your name or change your PIN at any time. You will need your current PIN to set a new one.</div>
         </div>
         <div style={{marginTop:10}}>
           <div style={{fontWeight:800,fontSize:".85rem",marginBottom:4}}>📊 Family Stats</div>
@@ -3265,7 +3265,7 @@ export default function App() {
 
               {/* What they're spending now */}
               <div style={{background:"var(--lavender)",borderRadius:12,padding:14,marginBottom:12}}>
-                <div style={{fontWeight:800,color:"var(--purple)",fontSize:".9rem",marginBottom:4}}>You're about to spend:</div>
+                <div style={{fontWeight:800,color:"var(--purple)",fontSize:".9rem",marginBottom:4}}>You are about to spend:</div>
                 <div style={{fontWeight:900,fontSize:"1.2rem",color:"var(--purple)"}}>{pts(bank.costPoints)} · {money(bank.costPoints,rate,currency)}</div>
                 <div style={{fontSize:".78rem",color:"var(--mid)",fontWeight:600,marginTop:4}}>for: {bank.reward}</div>
               </div>
@@ -3438,7 +3438,7 @@ export default function App() {
                 </div>
                 {selChild&&(<>
                   <div className="flex-between" style={{marginBottom:14}}>
-                    <div className="section-title" style={{marginBottom:0}}>🏦 {data.children.find(c=>c.id===selChild)?.name}'s Banks</div>
+                    <div className="section-title" style={{marginBottom:0}}>🏦 {data.children.find(c=>c.id===selChild)?.name} Banks</div>
                     <button className="btn btn-purple btn-sm" onClick={()=>setModal("addBank")}>+ Add Bank</button>
                   </div>
                   {childBanks.length===0&&<div className="empty"><div className="empty-icon">🏦</div><div className="empty-text">No banks yet</div></div>}
